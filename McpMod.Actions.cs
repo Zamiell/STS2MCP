@@ -1,5 +1,7 @@
+using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Reflection;
 using System.Text.Json;
 using MegaCrit.Sts2.Core.Nodes.Cards;
 using MegaCrit.Sts2.Core.Nodes.Cards.Holders;
@@ -14,6 +16,7 @@ using MegaCrit.Sts2.Core.Nodes.Screens.Overlays;
 using MegaCrit.Sts2.Core.Nodes.Screens.TreasureRoomRelic;
 using MegaCrit.Sts2.Core.Entities.Merchant;
 using MegaCrit.Sts2.Core.Models.Events;
+using MegaCrit.Sts2.Core.Models;
 using MegaCrit.Sts2.Core.Nodes.Events;
 using MegaCrit.Sts2.Core.Nodes.Events.Custom;
 using MegaCrit.Sts2.Core.Nodes.Events.Custom.CrystalSphere;
@@ -62,6 +65,7 @@ public static partial class McpMod
         return action switch
         {
             "return_to_main_menu" => ExecuteReturnToMainMenu(),
+            "debug_start_encounter" => ExecuteDebugStartEncounter(runState, data),
             "play_card" => ExecutePlayCard(player, data),
             "use_potion" => ExecuteUsePotion(player, data),
             "discard_potion" => ExecuteDiscardPotion(player, data),
@@ -106,6 +110,64 @@ public static partial class McpMod
             ["message"] = "Returning to main menu"
         };
     }
+
+    private static Dictionary<string, object?> ExecuteDebugStartEncounter(RunState runState, Dictionary<string, JsonElement> data)
+    {
+        try
+        {
+            if (!data.TryGetValue("encounter", out var encounterElem))
+                return Error("Missing 'encounter' (e.g. 'ChompersNormal' or 'chompers-normal')");
+
+            if (CombatManager.Instance.IsInProgress)
+                return Error("Cannot debug-start an encounter while combat is already in progress");
+
+            string encounterName = encounterElem.GetString() ?? "";
+            var encounter = CreateEncounterModel(encounterName);
+            if (encounter == null)
+                return Error($"Unknown encounter: {encounterName}");
+
+            var room = new CombatRoom(encounter, runState);
+            typeof(AbstractRoom)
+                .GetProperty(nameof(AbstractRoom.Id), BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance)
+                ?.SetValue(room, runState.GetAndIncrementNextRoomId());
+            runState.PushRoom(room);
+            _ = room.Enter(runState, false);
+
+            return new Dictionary<string, object?>
+            {
+                ["status"] = "ok",
+                ["message"] = $"Starting debug encounter: {encounter.GetType().Name}",
+                ["encounter"] = encounter.GetType().Name
+            };
+        }
+        catch (System.Exception ex)
+        {
+            var detail = ex.InnerException == null ? ex.Message : $"{ex.Message}: {ex.InnerException.Message}";
+            return Error($"Failed to start debug encounter: {detail}");
+        }
+    }
+
+    private static EncounterModel? CreateEncounterModel(string encounterName)
+    {
+        string normalized = NormalizeIdentifier(encounterName);
+        var assembly = typeof(EncounterModel).Assembly;
+        var encounterType = assembly.GetTypes()
+            .Where(type => !type.IsAbstract && typeof(EncounterModel).IsAssignableFrom(type))
+            .FirstOrDefault(type =>
+                NormalizeIdentifier(type.Name) == normalized ||
+                NormalizeIdentifier(type.FullName ?? "") == normalized);
+
+        if (encounterType == null)
+            return null;
+
+        var canonical = typeof(ModelDb)
+            .GetMethod("Get", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static, [typeof(Type)])
+            ?.Invoke(null, [encounterType]) as EncounterModel;
+        return canonical?.MutableClone() as EncounterModel;
+    }
+
+    private static string NormalizeIdentifier(string value) =>
+        new(value.Where(char.IsLetterOrDigit).Select(char.ToLowerInvariant).ToArray());
 
     private static Dictionary<string, object?> ExecutePlayCard(Player player, Dictionary<string, JsonElement> data)
     {

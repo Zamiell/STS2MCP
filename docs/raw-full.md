@@ -1097,6 +1097,22 @@ Use this before `menu_select` with `abandon_run` when replacing an in-progress r
 
 ---
 
+### `debug_start_encounter`
+
+Start a specific encounter immediately in the active singleplayer run. This is intended for validation/debug workflows.
+
+```json
+{ "action": "debug_start_encounter", "encounter": "ChompersNormal" }
+```
+
+| Parameter | Type | Required | Description |
+|---|---|---|---|
+| `encounter` | string | Yes | Encounter model class name such as `ChompersNormal`, or a normalized name such as `chompers-normal`. |
+
+Do not call while already in combat. The action uses the active run state and enters a new combat room directly.
+
+---
+
 ### `play_card`
 
 Play a card from hand during combat.

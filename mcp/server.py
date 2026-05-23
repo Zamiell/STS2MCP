@@ -210,6 +210,20 @@ async def menu_select(option: str, seed: str | None = None) -> str:
 
 
 @mcp.tool()
+async def debug_start_encounter(encounter: str) -> str:
+    """Start a specific encounter immediately in the active singleplayer run.
+
+    This is intended for validation/debug workflows. `encounter` can be a model
+    class name such as "ChompersNormal" or a normalized name such as
+    "chompers-normal". Do not call while already in combat.
+    """
+    try:
+        return await _post({"action": "debug_start_encounter", "encounter": encounter})
+    except Exception as e:
+        return _handle_error(e)
+
+
+@mcp.tool()
 async def return_to_main_menu() -> str:
     """Return from an active singleplayer run to the main menu.
 
