@@ -61,6 +61,7 @@ public static partial class McpMod
 
         return action switch
         {
+            "return_to_main_menu" => ExecuteReturnToMainMenu(),
             "play_card" => ExecutePlayCard(player, data),
             "use_potion" => ExecuteUsePotion(player, data),
             "discard_potion" => ExecuteDiscardPotion(player, data),
@@ -89,6 +90,20 @@ public static partial class McpMod
             "crystal_sphere_click_cell" => ExecuteCrystalSphereClickCell(data),
             "crystal_sphere_proceed" => ExecuteCrystalSphereProceed(),
             _ => Error($"Unknown action: {action}")
+        };
+    }
+
+    private static Dictionary<string, object?> ExecuteReturnToMainMenu()
+    {
+        var game = NGame.Instance;
+        if (game == null)
+            return Error("Could not access game instance");
+
+        _ = game.ReturnToMainMenu();
+        return new Dictionary<string, object?>
+        {
+            ["status"] = "ok",
+            ["message"] = "Returning to main menu"
         };
     }
 

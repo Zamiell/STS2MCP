@@ -6,6 +6,7 @@
 |---|---|---|
 | `get_game_state(format?)` | General | Get current game state (`markdown` or `json`) |
 | `menu_select(option, seed?)` | General | Select a visible menu/game-over option |
+| `return_to_main_menu()` | General | Return from an active run to the main menu without restarting the game |
 | `get_profile()` | Profiles | Get active profile progress |
 | `get_compendium()` | Profiles | Get active profile progress grouped like the in-game Compendium |
 | `search_wiki(query, item_type?, limit?)` | Profiles | Fuzzy-search discovered card and relic wiki entries |

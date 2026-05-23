@@ -210,6 +210,19 @@ async def menu_select(option: str, seed: str | None = None) -> str:
 
 
 @mcp.tool()
+async def return_to_main_menu() -> str:
+    """Return from an active singleplayer run to the main menu.
+
+    Use this before `menu_select("abandon_run")` when replacing an in-progress
+    run without restarting the game process.
+    """
+    try:
+        return await _post({"action": "return_to_main_menu"})
+    except Exception as e:
+        return _handle_error(e)
+
+
+@mcp.tool()
 async def get_profile() -> str:
     """Get the current profile's persistent progress summary.
 

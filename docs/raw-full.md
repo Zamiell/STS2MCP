@@ -1085,6 +1085,18 @@ If `timeline` is blocked by pending obtained epochs, `menu_select` returns an er
 
 ---
 
+### `return_to_main_menu`
+
+Return from an active singleplayer run to the main menu without restarting the game process.
+
+```json
+{ "action": "return_to_main_menu" }
+```
+
+Use this before `menu_select` with `abandon_run` when replacing an in-progress run.
+
+---
+
 ### `play_card`
 
 Play a card from hand during combat.
