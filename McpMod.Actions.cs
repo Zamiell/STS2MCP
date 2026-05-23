@@ -119,12 +119,16 @@ public static partial class McpMod
                 return Error("Missing 'encounter' (e.g. 'ChompersNormal' or 'chompers-normal')");
 
             if (CombatManager.Instance.IsInProgress)
-                return Error("Cannot debug-start an encounter while combat is already in progress");
+                CombatManager.Instance.Reset(graceful: true);
 
             string encounterName = encounterElem.GetString() ?? "";
             var encounter = CreateEncounterModel(encounterName);
             if (encounter == null)
                 return Error($"Unknown encounter: {encounterName}");
+
+            var setting = ApplyOptionalEncounterSetting(encounter, data);
+            if (setting.Error != null)
+                return Error(setting.Error);
 
             var room = new CombatRoom(encounter, runState);
             typeof(AbstractRoom)
@@ -137,7 +141,8 @@ public static partial class McpMod
             {
                 ["status"] = "ok",
                 ["message"] = $"Starting debug encounter: {encounter.GetType().Name}",
-                ["encounter"] = encounter.GetType().Name
+                ["encounter"] = encounter.GetType().Name,
+                ["setting"] = setting.Value
             };
         }
         catch (System.Exception ex)
@@ -164,6 +169,42 @@ public static partial class McpMod
             .GetMethod("Get", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static, [typeof(Type)])
             ?.Invoke(null, [encounterType]) as EncounterModel;
         return canonical?.MutableClone() as EncounterModel;
+    }
+
+    private static (string? Value, string? Error) ApplyOptionalEncounterSetting(
+        EncounterModel encounter,
+        Dictionary<string, JsonElement> data)
+    {
+        if (!data.TryGetValue("setting", out var settingElem))
+            return (null, null);
+
+        var settingProperty = encounter.GetType()
+            .GetProperty("Setting", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
+        if (settingProperty == null || !settingProperty.CanWrite)
+            return (null, $"{encounter.GetType().Name} does not support a 'setting' parameter");
+
+        string? settingText = settingElem.ValueKind switch
+        {
+            JsonValueKind.String => settingElem.GetString(),
+            JsonValueKind.Number => settingElem.GetInt32().ToString(),
+            _ => null
+        };
+        if (string.IsNullOrWhiteSpace(settingText))
+            return (null, "'setting' must be a string enum name or integer enum value");
+
+        try
+        {
+            var settingType = settingProperty.PropertyType;
+            object settingValue = settingType.IsEnum
+                ? Enum.Parse(settingType, settingText, ignoreCase: true)
+                : Convert.ChangeType(settingText, settingType);
+            settingProperty.SetValue(encounter, settingValue);
+            return (settingValue.ToString(), null);
+        }
+        catch (System.Exception ex)
+        {
+            return (null, $"Invalid setting for {encounter.GetType().Name}: {settingText} ({ex.Message})");
+        }
     }
 
     private static string NormalizeIdentifier(string value) =>
