@@ -4,6 +4,7 @@ using System.Text.Json;
 using MegaCrit.Sts2.Core.Nodes.Cards;
 using MegaCrit.Sts2.Core.Nodes.Cards.Holders;
 using MegaCrit.Sts2.Core.Nodes.CommonUi;
+using MegaCrit.Sts2.Core.Nodes;
 using MegaCrit.Sts2.Core.Nodes.Rewards;
 using MegaCrit.Sts2.Core.Nodes.Screens;
 using MegaCrit.Sts2.Core.Nodes.Screens.CardSelection;
@@ -1622,16 +1623,28 @@ public static partial class McpMod
                 seed = seed.Trim();
                 if (charSelect.Lobby == null)
                 {
-                    return Error("Seeded embark is not supported for standard singleplayer from this API. Seed was not applied and the run was not started.");
+                    return Error("Seeded embark failed before starting the run: character select lobby is unavailable.");
                 }
 
-                try
+                if (charSelect.Lobby.NetService.Type == MegaCrit.Sts2.Core.Multiplayer.Game.NetGameType.Singleplayer)
                 {
-                    charSelect.Lobby.SetSeed(seed);
+                    if (NGame.Instance == null)
+                    {
+                        return Error("Seeded embark failed before starting the run: game instance is unavailable.");
+                    }
+
+                    NGame.Instance.DebugSeedOverride = seed;
                 }
-                catch (System.Exception ex)
+                else
                 {
-                    return Error($"Seeded embark failed before starting the run: {ex.Message}");
+                    try
+                    {
+                        charSelect.Lobby.SetSeed(seed);
+                    }
+                    catch (System.Exception ex)
+                    {
+                        return Error($"Seeded embark failed before starting the run: {ex.Message}");
+                    }
                 }
             }
 

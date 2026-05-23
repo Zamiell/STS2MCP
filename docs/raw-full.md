@@ -1078,7 +1078,7 @@ Select an option from the main menu, a menu submenu, profile select, character s
 | Parameter | Type | Required | Description |
 |---|---|---|---|
 | `option` | string | Yes | One of the current state's advertised menu options. Matching is case-insensitive. |
-| `seed` | string | No | Only supported in menu contexts that expose a real seeded flow. Standard singleplayer character select currently returns an error without starting a run when `seed` is supplied. |
+| `seed` | string | No | Optional seed to apply when embarking from character select. Supported for standard singleplayer and multiplayer host flows. |
 
 `game_over` advertises only `main_menu`. `continue` is not actionable on that screen and returns an error.
 If `timeline` is blocked by pending obtained epochs, `menu_select` returns an error with `manual_action_required: true` and `pending_epoch_ids` instead of opening Timeline.
