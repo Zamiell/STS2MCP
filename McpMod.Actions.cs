@@ -33,6 +33,7 @@ using MegaCrit.Sts2.Core.Commands;
 using MegaCrit.Sts2.Core.Context;
 using MegaCrit.Sts2.Core.Entities.Cards;
 using MegaCrit.Sts2.Core.Entities.Creatures;
+using MegaCrit.Sts2.Core.Entities.Multiplayer;
 using MegaCrit.Sts2.Core.Entities.Players;
 using MegaCrit.Sts2.Core.Entities.Potions;
 using MegaCrit.Sts2.Core.GameActions;
@@ -66,6 +67,7 @@ public static partial class McpMod
         {
             "return_to_main_menu" => ExecuteReturnToMainMenu(),
             "debug_start_encounter" => ExecuteDebugStartEncounter(runState, data),
+            "debug_force_play_phase" => ExecuteDebugForcePlayPhase(),
             "play_card" => ExecutePlayCard(player, data),
             "use_potion" => ExecuteUsePotion(player, data),
             "discard_potion" => ExecuteDiscardPotion(player, data),
@@ -209,6 +211,49 @@ public static partial class McpMod
 
     private static string NormalizeIdentifier(string value) =>
         new(value.Where(char.IsLetterOrDigit).Select(char.ToLowerInvariant).ToArray());
+
+    private static Dictionary<string, object?> ExecuteDebugForcePlayPhase()
+    {
+        var manager = CombatManager.Instance;
+        var combatState = manager.DebugOnlyGetState();
+        if (!manager.IsInProgress || combatState == null)
+            return Error("Not in combat");
+        if (combatState.CurrentSide != CombatSide.Player)
+            return Error($"Cannot force play phase while current side is {combatState.CurrentSide}");
+
+        SetMember(manager, "_playerActionsDisabled", false);
+        SetMember(manager, nameof(CombatManager.IsEnemyTurnStarted), false);
+        SetMember(manager, nameof(CombatManager.EndingPlayerTurnPhaseOne), false);
+        SetMember(manager, nameof(CombatManager.EndingPlayerTurnPhaseTwo), false);
+
+        foreach (var player in combatState.Players)
+            if (player.PlayerCombatState != null)
+                player.PlayerCombatState.Phase = PlayerTurnPhase.Play;
+
+        RunManager.Instance.ActionExecutor.Unpause();
+        RunManager.Instance.ActionQueueSynchronizer.SetCombatState(ActionSynchronizerCombatState.PlayPhase);
+
+        return new Dictionary<string, object?>
+        {
+            ["status"] = "ok",
+            ["message"] = "Forced combat into play phase"
+        };
+    }
+
+    private static void SetMember(object target, string name, object? value)
+    {
+        var type = target.GetType();
+        var field = type.GetField(name, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
+        if (field != null)
+        {
+            field.SetValue(target, value);
+            return;
+        }
+
+        var property = type.GetProperty(name, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
+        if (property != null)
+            property.SetValue(target, value);
+    }
 
     private static Dictionary<string, object?> ExecutePlayCard(Player player, Dictionary<string, JsonElement> data)
     {
