@@ -84,6 +84,7 @@ public static partial class McpMod
         {
             // Optional settings UI patches should not block the HTTP bridge itself.
             TryApplyHarmonyPatches();
+            EnableInstantModeByDefault();
 
             // Connect to main thread process frame for action execution
             var tree = (SceneTree)Engine.GetMainLoop();

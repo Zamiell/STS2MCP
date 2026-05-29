@@ -16,6 +16,22 @@ public static partial class McpMod
     private static NFastModeTickbox? _instantModeTickbox;
     private static NFastModeTickbox? _originalFastModeTickbox;
 
+    private static void EnableInstantModeByDefault()
+    {
+        var saveManager = SaveManager.Instance;
+        if (saveManager?.PrefsSave == null)
+        {
+            GD.Print("[STS2 MCP] Instant Mode default deferred until preferences are available");
+            return;
+        }
+
+        if (saveManager.PrefsSave.FastMode == FastModeType.Instant)
+            return;
+
+        saveManager.PrefsSave.FastMode = FastModeType.Instant;
+        GD.Print("[STS2 MCP] Instant Mode enabled by default");
+    }
+
     private static bool IsInInstantModeLine(Node node)
     {
         var current = node;
@@ -43,6 +59,7 @@ public static partial class McpMod
 
     private static void InjectInstantModeCheckbox(NSettingsScreen settingsScreen)
     {
+        EnableInstantModeByDefault();
         _instantModeTickbox = null;
         _originalFastModeTickbox = null;
 
