@@ -137,7 +137,15 @@ $env:STS2_GAME_DIR = "D:\SteamLibrary\steamapps\common\Slay the Spire 2"
 .\build.ps1
 ```
 
-The script builds `STS2_MCP.dll` into `out/STS2_MCP/`. Copy it along with the manifest JSON to `<game_install>/mods/` to install:
+**Bash/Git Bash**:
+
+```bash
+./build.sh
+```
+
+By default, `build.sh` builds against and installs to `C:\Program Files (x86)\Steam\steamapps\common\Slay the Spire 2\mods`. Set `STS2_GAME_DIR` or `STS2_MODS_DIR` to override those paths.
+
+The build scripts build `STS2_MCP.dll` into `out/STS2_MCP/`. Copy it along with the manifest JSON to `<game_install>/mods/` to install:
 
 ```
 out/STS2_MCP/STS2_MCP.dll           ->  <game_install>/mods/STS2_MCP.dll

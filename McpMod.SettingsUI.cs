@@ -28,8 +28,8 @@ public static partial class McpMod
         if (saveManager.PrefsSave.FastMode == FastModeType.Instant)
             return;
 
-        saveManager.PrefsSave.FastMode = FastModeType.Instant;
-        GD.Print("[STS2 MCP] Instant Mode enabled by default");
+        // saveManager.PrefsSave.FastMode = FastModeType.Instant;
+        // GD.Print("[STS2 MCP] Instant Mode enabled by default");
     }
 
     private static bool IsInInstantModeLine(Node node)
