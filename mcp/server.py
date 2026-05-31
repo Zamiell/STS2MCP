@@ -210,6 +210,20 @@ async def menu_select(option: str, seed: str | None = None) -> str:
 
 
 @mcp.tool()
+async def get_replays() -> str:
+    """List RunReplays replays currently available to the game.
+
+    Requires the RunReplays mod to be installed and enabled alongside STS2_MCP.
+    Returns every discovered replay floor plus grouped entries by seed. Use a
+    returned `target` value with `start_replay(target=...)`.
+    """
+    try:
+        return await _post({"action": "get_replays"})
+    except Exception as e:
+        return _handle_error(e)
+
+
+@mcp.tool()
 async def start_replay(
     seed: str | None = None, floor: int | None = None, target: str | None = None
 ) -> str:

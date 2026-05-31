@@ -1097,6 +1097,25 @@ Use this before `menu_select` with `abandon_run` when replacing an in-progress r
 
 ---
 
+### `get_replays`
+
+List every replay floor currently discoverable by the RunReplays mod. RunReplays must be installed and enabled in the same game process.
+
+```json
+{ "action": "get_replays" }
+```
+
+The response includes:
+
+- `count`: total replay floor entries.
+- `seed_count`: number of distinct replay seeds.
+- `replays`: flat list of replay floor entries with `seed`, `character_id`, `floor`, `ascension`, `saved_at`, `minimal_log_path`, `save_path`, `is_sample`, and `target`.
+- `groups`: entries grouped by seed. Each flat entry's `target` can be passed directly to `start_replay`.
+
+If RunReplays is not loaded, the action returns an error.
+
+---
+
 ### `start_replay`
 
 Start a recorded run replay through the RunReplays mod. RunReplays must be installed and enabled in the same game process.

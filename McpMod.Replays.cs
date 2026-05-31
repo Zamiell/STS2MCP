@@ -8,6 +8,83 @@ namespace STS2_MCP;
 
 public static partial class McpMod
 {
+    private static Type? GetRunReplayMenuType()
+    {
+        return AppDomain.CurrentDomain
+            .GetAssemblies()
+            .Select(assembly => assembly.GetType("RunReplays.RunReplayMenu", throwOnError: false))
+            .FirstOrDefault(type => type != null);
+    }
+
+    private static Dictionary<string, object?> ExecuteGetReplays()
+    {
+        Type? replayMenuType = GetRunReplayMenuType();
+        if (replayMenuType == null)
+            return Error("RunReplays mod is not loaded. Install and enable RunReplays before calling get_replays.");
+
+        MethodInfo? method = replayMenuType.GetMethod(
+            "ListReplays",
+            BindingFlags.Public | BindingFlags.Static);
+        if (method == null)
+            return Error("RunReplays does not expose ListReplays. Rebuild/install the updated RunReplays fork.");
+
+        object? result;
+        try
+        {
+            result = method.Invoke(null, []);
+        }
+        catch (TargetInvocationException ex)
+        {
+            string detail = ex.InnerException?.Message ?? ex.Message;
+            return Error($"RunReplays failed to list replays: {detail}");
+        }
+
+        if (result is not System.Collections.IEnumerable entries)
+            return Error("RunReplays returned an invalid replay list.");
+
+        var replayEntries = new List<Dictionary<string, object?>>();
+        foreach (object? entry in entries)
+        {
+            if (entry == null)
+                continue;
+
+            replayEntries.Add(new Dictionary<string, object?>
+            {
+                ["seed"] = ReadStringProperty(entry, "Seed"),
+                ["character_id"] = ReadStringProperty(entry, "CharacterId"),
+                ["floor"] = ReadNullableIntProperty(entry, "Floor"),
+                ["ascension"] = ReadNullableIntProperty(entry, "Ascension"),
+                ["saved_at"] = ReadDateTimeProperty(entry, "SavedAt")?.ToString("O"),
+                ["minimal_log_path"] = ReadStringProperty(entry, "MinimalLogPath"),
+                ["save_path"] = ReadStringProperty(entry, "SavePath"),
+                ["is_sample"] = ReadBoolProperty(entry, "IsSample"),
+                ["target"] = ReadStringProperty(entry, "Target")
+            });
+        }
+
+        var grouped = replayEntries
+            .GroupBy(entry => entry["seed"] as string ?? "")
+            .Select(group => new Dictionary<string, object?>
+            {
+                ["seed"] = group.Key,
+                ["character_id"] = group.FirstOrDefault()?["character_id"],
+                ["floors"] = group
+                    .OrderByDescending(entry => entry["floor"] as int? ?? 0)
+                    .ToList()
+            })
+            .OrderBy(group => group["seed"] as string)
+            .ToList();
+
+        return new Dictionary<string, object?>
+        {
+            ["status"] = "ok",
+            ["count"] = replayEntries.Count,
+            ["seed_count"] = grouped.Count,
+            ["replays"] = replayEntries,
+            ["groups"] = grouped
+        };
+    }
+
     private static Dictionary<string, object?> ExecuteStartReplay(
         Dictionary<string, JsonElement> data)
     {
@@ -22,11 +99,7 @@ public static partial class McpMod
         if (string.IsNullOrWhiteSpace(target) && string.IsNullOrWhiteSpace(seed))
             return Error("Missing 'seed' or 'target'. Use target='SEED[:floor_N]' or seed plus optional floor.");
 
-        Type? replayMenuType = AppDomain.CurrentDomain
-            .GetAssemblies()
-            .Select(assembly => assembly.GetType("RunReplays.RunReplayMenu", throwOnError: false))
-            .FirstOrDefault(type => type != null);
-
+        Type? replayMenuType = GetRunReplayMenuType();
         if (replayMenuType == null)
             return Error("RunReplays mod is not loaded. Install and enable RunReplays before calling start_replay.");
 
@@ -103,5 +176,11 @@ public static partial class McpMod
     {
         object? value = source.GetType().GetProperty(propertyName)?.GetValue(source);
         return value is bool boolValue && boolValue;
+    }
+
+    private static DateTime? ReadDateTimeProperty(object source, string propertyName)
+    {
+        object? value = source.GetType().GetProperty(propertyName)?.GetValue(source);
+        return value is DateTime dateTime ? dateTime : null;
     }
 }
