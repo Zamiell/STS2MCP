@@ -205,43 +205,6 @@ Use a potion from the player's potion slots.
 | `slot`   | `int`    | yes      | Potion slot index.                       |
 | `target` | `string` | no       | Target entity_id for targetable potions. |
 
-### Legacy RunReplays
-
-#### `get_replay_status`
-
-Read the current external RunReplays playback status.
-
-No fields.
-
-Notes:
-
-- Legacy/external interop: requires RunReplays to be installed and enabled.
-
-#### `get_replays`
-
-List replay floors discoverable through the external RunReplays mod.
-
-No fields.
-
-Notes:
-
-- Legacy/external interop: requires RunReplays to be installed and enabled. Prefer STS2MCP .replay recording for new replay data.
-
-#### `start_replay`
-
-Start playback through the external RunReplays mod.
-
-| Field         | Type     | Required | Description                                                                      |
-| ------------- | -------- | -------- | -------------------------------------------------------------------------------- |
-| `target`      | `string` | no       | Compact replay target, such as SEED or SEED:floor_N.                             |
-| `seed`        | `string` | no       | Replay seed to launch when target is omitted.                                    |
-| `floor`       | `int`    | no       | Optional floor number to replay to for seed.                                     |
-| `start_floor` | `int`    | no       | Optional saved floor to load before replaying to floor; requires seed and floor. |
-
-Notes:
-
-- Legacy/external interop: requires RunReplays to be installed and enabled. Prefer STS2MCP .replay recording for new replay data.
-
 ### Map
 
 #### `choose_map_node`

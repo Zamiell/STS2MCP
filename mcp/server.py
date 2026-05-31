@@ -210,55 +210,6 @@ async def menu_select(option: str, seed: str | None = None) -> str:
 
 
 @mcp.tool()
-async def get_replays() -> str:
-    """List RunReplays replays currently available to the game.
-
-    Requires the RunReplays mod to be installed and enabled alongside STS2_MCP.
-    Returns every discovered replay floor plus grouped entries by seed. Use a
-    returned `target` value with `start_replay(target=...)`.
-    """
-    try:
-        return await _post({"action": "get_replays"})
-    except Exception as e:
-        return _handle_error(e)
-
-
-@mcp.tool()
-async def start_replay(
-    seed: str | None = None,
-    floor: int | None = None,
-    target: str | None = None,
-    start_floor: int | None = None,
-) -> str:
-    """Start a RunReplays replay from the main menu.
-
-    Requires the RunReplays mod to be installed and enabled alongside STS2_MCP.
-    Use either `target` in the form "SEED" or "SEED:floor_N", provide
-    `seed` with an optional numeric `floor`, or provide `seed`, `floor`, and
-    `start_floor` to load a saved floor and replay the remaining commands.
-
-    Args:
-        seed: Replay seed to launch.
-        floor: Optional floor number to replay to for that seed.
-        target: Optional compact target string, e.g. "ABC123:floor_12".
-        start_floor: Optional saved floor to load before replaying to `floor`.
-    """
-    body: dict = {"action": "start_replay"}
-    if target is not None:
-        body["target"] = target
-    if seed is not None:
-        body["seed"] = seed
-    if floor is not None:
-        body["floor"] = floor
-    if start_floor is not None:
-        body["start_floor"] = start_floor
-    try:
-        return await _post(body)
-    except Exception as e:
-        return _handle_error(e)
-
-
-@mcp.tool()
 async def debug_start_encounter(encounter: str) -> str:
     """Start a specific encounter immediately in the active singleplayer run.
 

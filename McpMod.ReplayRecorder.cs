@@ -5,6 +5,8 @@ using System.IO;
 using System.Text.Json;
 using Godot;
 using MegaCrit.Sts2.Core.Runs;
+using MegaCrit.Sts2.Core.Saves;
+using MegaCrit.Sts2.Core.Saves.Managers;
 
 namespace STS2_MCP;
 
@@ -15,6 +17,7 @@ public static partial class McpMod
     private static readonly List<string> _pendingReplayCommands = [];
     private static string? _activeReplayRunKey;
     private static string? _activeReplayPath;
+    private static DateTimeOffset _nextReplayFileEnsureAt = DateTimeOffset.MinValue;
 
     private static readonly JsonSerializerOptions _replayJsonOptions = new()
     {
@@ -32,7 +35,7 @@ public static partial class McpMod
         try
         {
             var line = JsonSerializer.Serialize(command, _replayJsonOptions);
-            var runInfo = TryGetReplayRunInfo();
+            var runInfo = TryGetReplayRunInfo(logMissing: true);
 
             lock (_replayRecorderLock)
             {
@@ -42,26 +45,68 @@ public static partial class McpMod
                     return;
                 }
 
-                if (_activeReplayRunKey != runInfo.RunKey)
-                {
-                    _activeReplayRunKey = runInfo.RunKey;
-                    _activeReplayPath = runInfo.Path;
-
-                    Directory.CreateDirectory(Path.GetDirectoryName(runInfo.Path)!);
-                    if (!File.Exists(runInfo.Path))
-                        File.WriteAllText(runInfo.Path, "");
-
-                    foreach (var pendingLine in _pendingReplayCommands)
-                        File.AppendAllText(runInfo.Path, pendingLine + System.Environment.NewLine);
-                    _pendingReplayCommands.Clear();
-                }
-
+                EnsureReplayFileForRun(runInfo);
                 File.AppendAllText(runInfo.Path, line + System.Environment.NewLine);
             }
         }
         catch (Exception ex)
         {
             GD.PrintErr($"[STS2 MCP] Failed to record replay command: {ex.Message}");
+        }
+    }
+
+    private static void MaybeEnsureReplayFileForCurrentRun()
+    {
+        var now = DateTimeOffset.UtcNow;
+        if (now < _nextReplayFileEnsureAt)
+            return;
+
+        _nextReplayFileEnsureAt = now.AddSeconds(1);
+        EnsureReplayFileForCurrentRun();
+    }
+
+    private static void EnsureReplayFileForCurrentRun()
+    {
+        try
+        {
+            var runInfo = TryGetReplayRunInfo(logMissing: false);
+            if (runInfo == null)
+                return;
+
+            lock (_replayRecorderLock)
+                EnsureReplayFileForRun(runInfo);
+        }
+        catch (Exception ex)
+        {
+            GD.PrintErr($"[STS2 MCP] Failed to ensure replay file for current run: {ex.Message}");
+        }
+    }
+
+    private static void EnsureReplayFileForRun(ReplayRunInfo runInfo)
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(runInfo.Path)!);
+
+        if (_activeReplayRunKey != runInfo.RunKey)
+        {
+            _activeReplayRunKey = runInfo.RunKey;
+            _activeReplayPath = runInfo.Path;
+
+            if (!File.Exists(runInfo.Path))
+            {
+                File.WriteAllText(runInfo.Path, "");
+                GD.Print($"[STS2 MCP] ReplayRecorder: created {runInfo.Path}");
+            }
+
+            foreach (var pendingLine in _pendingReplayCommands)
+                File.AppendAllText(runInfo.Path, pendingLine + System.Environment.NewLine);
+            _pendingReplayCommands.Clear();
+            return;
+        }
+
+        if (!File.Exists(runInfo.Path))
+        {
+            File.WriteAllText(runInfo.Path, "");
+            GD.Print($"[STS2 MCP] ReplayRecorder: recreated {runInfo.Path}");
         }
     }
 
@@ -74,9 +119,6 @@ public static partial class McpMod
 
         var action = actionElement.GetString();
         if (string.IsNullOrWhiteSpace(action))
-            return false;
-
-        if (action is "get_replays" or "get_replay_status" or "start_replay")
             return false;
 
         if (result.ContainsKey("error"))
@@ -96,18 +138,20 @@ public static partial class McpMod
             _pendingReplayCommands.RemoveAt(0);
     }
 
-    private static ReplayRunInfo? TryGetReplayRunInfo()
+    private static ReplayRunInfo? TryGetReplayRunInfo(bool logMissing)
     {
         if (RunManager.Instance?.IsInProgress != true)
         {
-            GD.Print("[STS2 MCP] ReplayRecorder: run not in progress, skipping");
+            if (logMissing)
+                GD.Print("[STS2 MCP] ReplayRecorder: run not in progress, skipping");
             return null;
         }
 
         var saveManager = SaveManager.Instance;
         if (saveManager == null)
         {
-            GD.PrintErr("[STS2 MCP] ReplayRecorder: SaveManager.Instance is null");
+            if (logMissing)
+                GD.PrintErr("[STS2 MCP] ReplayRecorder: SaveManager.Instance is null");
             return null;
         }
 
@@ -119,13 +163,18 @@ public static partial class McpMod
 
         if (string.IsNullOrWhiteSpace(currentRunPath) || !File.Exists(currentRunPath))
         {
-            GD.PrintErr($"[STS2 MCP] ReplayRecorder: current_run.save not found (progressPath={progressPath}, profileRoot={profileRoot})");
+            if (logMissing)
+                GD.PrintErr($"[STS2 MCP] ReplayRecorder: current_run.save not found (progressPath={progressPath}, profileRoot={profileRoot})");
             return null;
         }
 
         try
         {
-            using var stream = new FileStream(currentRunPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+            using var stream = new FileStream(
+                currentRunPath,
+                FileMode.Open,
+                System.IO.FileAccess.Read,
+                FileShare.ReadWrite);
             using var document = JsonDocument.Parse(stream);
             var root = document.RootElement;
 
@@ -139,7 +188,8 @@ public static partial class McpMod
 
             if (string.IsNullOrWhiteSpace(seed))
             {
-                GD.PrintErr("[STS2 MCP] ReplayRecorder: seed missing from current_run.save");
+                if (logMissing)
+                    GD.PrintErr("[STS2 MCP] ReplayRecorder: seed missing from current_run.save");
                 return null;
             }
 
@@ -161,7 +211,8 @@ public static partial class McpMod
         }
         catch (Exception ex)
         {
-            GD.PrintErr($"[STS2 MCP] ReplayRecorder: failed to read current_run.save: {ex.Message}");
+            if (logMissing)
+                GD.PrintErr($"[STS2 MCP] ReplayRecorder: failed to read current_run.save: {ex.Message}");
             return null;
         }
     }

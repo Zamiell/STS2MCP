@@ -134,6 +134,8 @@ public static partial class McpMod
             catch (Exception ex) { GD.PrintErr($"[STS2 MCP] Main thread action error: {ex}"); }
             processed++;
         }
+
+        MaybeEnsureReplayFileForCurrentRun();
     }
 
     internal static Task<T> RunOnMainThread<T>(Func<T> func)
@@ -470,51 +472,6 @@ public static partial class McpMod
             catch (Exception ex)
             {
                 SendError(response, 500, $"Menu action failed: {ex.Message}");
-            }
-            return;
-        }
-
-        if (action == "start_replay")
-        {
-            try
-            {
-                var resultTask = RunOnMainThread(() => ExecuteStartReplay(parsed));
-                var result = resultTask.GetAwaiter().GetResult();
-                SendJson(response, result);
-            }
-            catch (Exception ex)
-            {
-                SendError(response, 500, $"Replay action failed: {ex.Message}");
-            }
-            return;
-        }
-
-        if (action == "get_replays")
-        {
-            try
-            {
-                var resultTask = RunOnMainThread(ExecuteGetReplays);
-                var result = resultTask.GetAwaiter().GetResult();
-                SendJson(response, result);
-            }
-            catch (Exception ex)
-            {
-                SendError(response, 500, $"Replay listing failed: {ex.Message}");
-            }
-            return;
-        }
-
-        if (action == "get_replay_status")
-        {
-            try
-            {
-                var resultTask = RunOnMainThread(ExecuteGetReplayStatus);
-                var result = resultTask.GetAwaiter().GetResult();
-                SendJson(response, result);
-            }
-            catch (Exception ex)
-            {
-                SendError(response, 500, $"Replay status failed: {ex.Message}");
             }
             return;
         }
