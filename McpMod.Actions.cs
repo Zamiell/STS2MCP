@@ -99,6 +99,7 @@ public static partial class McpMod
         };
     }
 
+    [McpAction("return_to_main_menu", "Debug", "Return the current game to the main menu.")]
     private static Dictionary<string, object?> ExecuteReturnToMainMenu()
     {
         var game = NGame.Instance;
@@ -113,6 +114,8 @@ public static partial class McpMod
         };
     }
 
+    [McpAction("debug_start_encounter", "Debug", "Start a specific debug encounter.")]
+    [McpActionField("encounter", "string", true, "Encounter id or name, such as ChompersNormal.")]
     private static Dictionary<string, object?> ExecuteDebugStartEncounter(RunState runState, Dictionary<string, JsonElement> data)
     {
         try
@@ -212,6 +215,7 @@ public static partial class McpMod
     private static string NormalizeIdentifier(string value) =>
         new(value.Where(char.IsLetterOrDigit).Select(char.ToLowerInvariant).ToArray());
 
+    [McpAction("debug_force_play_phase", "Debug", "Force combat back into player play phase.")]
     private static Dictionary<string, object?> ExecuteDebugForcePlayPhase()
     {
         var manager = CombatManager.Instance;
@@ -255,6 +259,9 @@ public static partial class McpMod
             property.SetValue(target, value);
     }
 
+    [McpAction("play_card", "Combat", "Play a card from the player's hand.")]
+    [McpActionField("card_index", "int", true, "0-based index in the current hand.")]
+    [McpActionField("target", "string", false, "Target entity_id for single-target cards.")]
     private static Dictionary<string, object?> ExecutePlayCard(Player player, Dictionary<string, JsonElement> data)
     {
         if (!CombatManager.Instance.IsInProgress)
@@ -310,6 +317,7 @@ public static partial class McpMod
         };
     }
 
+    [McpAction("end_turn", "Combat", "End the player's combat turn.")]
     private static Dictionary<string, object?> ExecuteEndTurn(Player player)
     {
         if (!CombatManager.Instance.IsInProgress)
@@ -333,6 +341,9 @@ public static partial class McpMod
         };
     }
 
+    [McpAction("use_potion", "General", "Use a potion from the player's potion slots.")]
+    [McpActionField("slot", "int", true, "Potion slot index.")]
+    [McpActionField("target", "string", false, "Target entity_id for targetable potions.")]
     private static Dictionary<string, object?> ExecuteUsePotion(Player player, Dictionary<string, JsonElement> data)
     {
         if (!data.TryGetValue("slot", out var slotElem))
@@ -408,6 +419,8 @@ public static partial class McpMod
         };
     }
 
+    [McpAction("discard_potion", "General", "Discard a potion from the player's potion slots.")]
+    [McpActionField("slot", "int", true, "Potion slot index.")]
     private static Dictionary<string, object?> ExecuteDiscardPotion(Player player, Dictionary<string, JsonElement> data)
     {
         if (!data.TryGetValue("slot", out var slotElem))
@@ -431,6 +444,8 @@ public static partial class McpMod
         };
     }
 
+    [McpAction("choose_event_option", "Event", "Choose an event option.")]
+    [McpActionField("index", "int", true, "0-based option index from next_options.")]
     private static Dictionary<string, object?> ExecuteChooseEventOption(Dictionary<string, JsonElement> data)
     {
         var uiRoom = NEventRoom.Instance;
@@ -462,6 +477,7 @@ public static partial class McpMod
         };
     }
 
+    [McpAction("advance_dialogue", "Event", "Advance event dialogue when a dialogue-only event is waiting.")]
     private static Dictionary<string, object?> ExecuteAdvanceDialogue()
     {
         var uiRoom = NEventRoom.Instance;
@@ -485,6 +501,8 @@ public static partial class McpMod
         };
     }
 
+    [McpAction("choose_rest_option", "Rest", "Choose a rest site option.")]
+    [McpActionField("index", "int", true, "0-based rest option index from next_options.")]
     private static Dictionary<string, object?> ExecuteChooseRestOption(Dictionary<string, JsonElement> data)
     {
         if (!data.TryGetValue("index", out var indexElem))
@@ -516,6 +534,8 @@ public static partial class McpMod
         };
     }
 
+    [McpAction("shop_purchase", "Shop", "Purchase an item from the current shop.")]
+    [McpActionField("index", "int", true, "0-based shop item index.")]
     private static Dictionary<string, object?> ExecuteShopPurchase(Player player, Dictionary<string, JsonElement> data)
     {
         MerchantInventory? inventory = null;
@@ -586,6 +606,8 @@ public static partial class McpMod
         };
     }
 
+    [McpAction("choose_map_node", "Map", "Travel to an available map node.")]
+    [McpActionField("index", "int", true, "0-based map node option index from next_options.")]
     private static Dictionary<string, object?> ExecuteChooseMapNode(Dictionary<string, JsonElement> data)
     {
         var mapScreen = NMapScreen.Instance;
@@ -618,6 +640,8 @@ public static partial class McpMod
         };
     }
 
+    [McpAction("claim_reward", "Reward", "Claim a reward from the rewards screen.")]
+    [McpActionField("index", "int", true, "0-based claimable reward index.")]
     private static Dictionary<string, object?> ExecuteClaimReward(Dictionary<string, JsonElement> data)
     {
         var overlay = NOverlayStack.Instance?.Peek();
@@ -655,6 +679,8 @@ public static partial class McpMod
         };
     }
 
+    [McpAction("select_card_reward", "Reward", "Select a card from the card reward screen.")]
+    [McpActionField("card_index", "int", true, "0-based card reward index.")]
     private static Dictionary<string, object?> ExecuteSelectCardReward(Dictionary<string, JsonElement> data)
     {
         var overlay = NOverlayStack.Instance?.Peek();
@@ -681,6 +707,7 @@ public static partial class McpMod
         };
     }
 
+    [McpAction("skip_card_reward", "Reward", "Skip the current card reward.")]
     private static Dictionary<string, object?> ExecuteSkipCardReward()
     {
         var overlay = NOverlayStack.Instance?.Peek();
@@ -700,6 +727,7 @@ public static partial class McpMod
         };
     }
 
+    [McpAction("proceed", "Navigation", "Press the active proceed button.")]
     private static Dictionary<string, object?> ExecuteProceed()
     {
         // Try rewards overlay
@@ -771,6 +799,8 @@ public static partial class McpMod
         return Error("No proceed button available or enabled");
     }
 
+    [McpAction("select_card", "Selection", "Select or toggle a card in the active card selection screen.")]
+    [McpActionField("index", "int", true, "0-based card index in the active selection screen.")]
     private static Dictionary<string, object?> ExecuteSelectCard(Dictionary<string, JsonElement> data)
     {
         var overlay = NOverlayStack.Instance?.Peek();
@@ -820,6 +850,7 @@ public static partial class McpMod
         return Error("No card selection screen is open");
     }
 
+    [McpAction("confirm_selection", "Selection", "Confirm the active card selection screen.")]
     private static Dictionary<string, object?> ExecuteConfirmSelection()
     {
         var overlay = NOverlayStack.Instance?.Peek();
@@ -882,6 +913,7 @@ public static partial class McpMod
         return Error("No confirm button is currently enabled - select more cards first");
     }
 
+    [McpAction("cancel_selection", "Selection", "Cancel the active card selection screen.")]
     private static Dictionary<string, object?> ExecuteCancelSelection()
     {
         var overlay = NOverlayStack.Instance?.Peek();
@@ -940,6 +972,8 @@ public static partial class McpMod
         return Error("No cancel/close button is currently enabled - selection may be mandatory");
     }
 
+    [McpAction("select_bundle", "Selection", "Select a bundle option.")]
+    [McpActionField("index", "int", true, "0-based bundle option index.")]
     private static Dictionary<string, object?> ExecuteSelectBundle(Dictionary<string, JsonElement> data)
     {
         var overlay = NOverlayStack.Instance?.Peek();
@@ -966,6 +1000,7 @@ public static partial class McpMod
         };
     }
 
+    [McpAction("confirm_bundle_selection", "Selection", "Confirm the active bundle selection.")]
     private static Dictionary<string, object?> ExecuteConfirmBundleSelection()
     {
         var overlay = NOverlayStack.Instance?.Peek();
@@ -984,6 +1019,7 @@ public static partial class McpMod
         };
     }
 
+    [McpAction("cancel_bundle_selection", "Selection", "Cancel the active bundle selection.")]
     private static Dictionary<string, object?> ExecuteCancelBundleSelection()
     {
         var overlay = NOverlayStack.Instance?.Peek();
@@ -1002,6 +1038,8 @@ public static partial class McpMod
         };
     }
 
+    [McpAction("combat_select_card", "Selection", "Select a card in the active combat hand selection UI.")]
+    [McpActionField("index", "int", true, "0-based card index.")]
     private static Dictionary<string, object?> ExecuteCombatSelectCard(Dictionary<string, JsonElement> data)
     {
         var hand = NPlayerHand.Instance;
@@ -1029,6 +1067,7 @@ public static partial class McpMod
         };
     }
 
+    [McpAction("combat_confirm_selection", "Selection", "Confirm the active combat hand selection UI.")]
     private static Dictionary<string, object?> ExecuteCombatConfirmSelection()
     {
         var hand = NPlayerHand.Instance;
@@ -1048,6 +1087,8 @@ public static partial class McpMod
         };
     }
 
+    [McpAction("select_relic", "Selection", "Select a relic from the active relic selection screen.")]
+    [McpActionField("index", "int", true, "0-based relic index.")]
     private static Dictionary<string, object?> ExecuteSelectRelic(Dictionary<string, JsonElement> data)
     {
         var overlay = NOverlayStack.Instance?.Peek();
@@ -1074,6 +1115,7 @@ public static partial class McpMod
         };
     }
 
+    [McpAction("skip_relic_selection", "Selection", "Skip the active relic selection screen.")]
     private static Dictionary<string, object?> ExecuteSkipRelicSelection()
     {
         var overlay = NOverlayStack.Instance?.Peek();
@@ -1093,6 +1135,8 @@ public static partial class McpMod
         };
     }
 
+    [McpAction("claim_treasure_relic", "Treasure", "Claim a relic from a treasure room.")]
+    [McpActionField("index", "int", true, "0-based treasure relic index.")]
     private static Dictionary<string, object?> ExecuteClaimTreasureRelic(Dictionary<string, JsonElement> data)
     {
         var treasureUI = FindFirst<NTreasureRoom>(
@@ -1127,6 +1171,8 @@ public static partial class McpMod
         };
     }
 
+    [McpAction("crystal_sphere_set_tool", "Event", "Set the active Crystal Sphere tool.")]
+    [McpActionField("tool", "int", true, "Tool id to select.")]
     private static Dictionary<string, object?> ExecuteCrystalSphereSetTool(Dictionary<string, JsonElement> data)
     {
         var overlay = NOverlayStack.Instance?.Peek();
@@ -1157,6 +1203,9 @@ public static partial class McpMod
         };
     }
 
+    [McpAction("crystal_sphere_click_cell", "Event", "Click a Crystal Sphere cell.")]
+    [McpActionField("x", "int", true, "Cell X coordinate.")]
+    [McpActionField("y", "int", true, "Cell Y coordinate.")]
     private static Dictionary<string, object?> ExecuteCrystalSphereClickCell(Dictionary<string, JsonElement> data)
     {
         var overlay = NOverlayStack.Instance?.Peek();
@@ -1186,6 +1235,7 @@ public static partial class McpMod
         };
     }
 
+    [McpAction("crystal_sphere_proceed", "Event", "Proceed from the Crystal Sphere event.")]
     private static Dictionary<string, object?> ExecuteCrystalSphereProceed()
     {
         var overlay = NOverlayStack.Instance?.Peek();
@@ -1240,6 +1290,9 @@ public static partial class McpMod
         return null;
     }
 
+    [McpAction("menu_select", "Menu", "Select a menu, popup, character-select, or FTUE option.")]
+    [McpActionField("option", "string", true, "Option id or advertised menu option.")]
+    [McpActionField("seed", "string", false, "Optional custom seed for character select.")]
     internal static Dictionary<string, object?> ExecuteMenuSelect(string option, string? seed = null)
     {
         option = option.Trim();

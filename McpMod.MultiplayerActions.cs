@@ -69,6 +69,7 @@ public static partial class McpMod
         };
     }
 
+    [McpAction("end_turn", "Multiplayer", "Mark the local multiplayer player ready to end turn.")]
     private static Dictionary<string, object?> ExecuteMultiplayerEndTurn(Player player)
     {
         if (!CombatManager.Instance.IsInProgress)
@@ -102,6 +103,7 @@ public static partial class McpMod
         };
     }
 
+    [McpAction("undo_end_turn", "Multiplayer", "Undo the local multiplayer end-turn ready state.")]
     private static Dictionary<string, object?> ExecuteUndoEndTurn(Player player)
     {
         if (!CombatManager.Instance.IsInProgress)
