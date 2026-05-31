@@ -85,6 +85,42 @@ public static partial class McpMod
         };
     }
 
+    private static Dictionary<string, object?> ExecuteGetReplayStatus()
+    {
+        Type? replayEngineType = AppDomain.CurrentDomain
+            .GetAssemblies()
+            .Select(assembly => assembly.GetType("RunReplays.ReplayEngine", throwOnError: false))
+            .FirstOrDefault(type => type != null);
+        if (replayEngineType == null)
+            return Error("RunReplays mod is not loaded.");
+
+        MethodInfo? method = replayEngineType.GetMethod(
+            "GetStatus",
+            BindingFlags.Public | BindingFlags.Static);
+        if (method == null)
+            return Error("RunReplays does not expose GetStatus. Rebuild/install the updated RunReplays fork.");
+
+        object? result = method.Invoke(null, []);
+        if (result == null)
+            return Error("RunReplays returned no replay status.");
+
+        return new Dictionary<string, object?>
+        {
+            ["status"] = "ok",
+            ["is_active"] = ReadBoolProperty(result, "IsActive"),
+            ["is_replay_run"] = ReadBoolProperty(result, "IsReplayRun"),
+            ["active_seed"] = ReadStringProperty(result, "ActiveSeed"),
+            ["loaded_count"] = ReadNullableIntProperty(result, "LoadedCount"),
+            ["pending_count"] = ReadNullableIntProperty(result, "PendingCount"),
+            ["consumed_count"] = ReadNullableIntProperty(result, "ConsumedCount"),
+            ["current_command"] = ReadStringProperty(result, "CurrentCommand"),
+            ["current_state_suffix"] = ReadStringProperty(result, "CurrentStateSuffix"),
+            ["next_commands"] = ReadStringEnumerableProperty(result, "NextCommands"),
+            ["next_state_suffixes"] = ReadStringEnumerableProperty(result, "NextStateSuffixes"),
+            ["recent_consumed"] = ReadStringEnumerableProperty(result, "RecentConsumed")
+        };
+    }
+
     private static Dictionary<string, object?> ExecuteStartReplay(
         Dictionary<string, JsonElement> data)
     {
@@ -95,9 +131,12 @@ public static partial class McpMod
             ? seedElem.GetString()
             : null;
         int? floor = TryReadNullableInt(data, "floor");
+        int? startFloor = TryReadNullableInt(data, "start_floor");
 
         if (string.IsNullOrWhiteSpace(target) && string.IsNullOrWhiteSpace(seed))
             return Error("Missing 'seed' or 'target'. Use target='SEED[:floor_N]' or seed plus optional floor.");
+        if (startFloor.HasValue && (string.IsNullOrWhiteSpace(seed) || !floor.HasValue))
+            return Error("start_floor requires seed and floor.");
 
         Type? replayMenuType = GetRunReplayMenuType();
         if (replayMenuType == null)
@@ -118,12 +157,24 @@ public static partial class McpMod
             }
             else
             {
-                method = replayMenuType.GetMethod(
-                    "StartReplayBySeed",
-                    BindingFlags.Public | BindingFlags.Static);
-                if (method == null)
-                    return Error("RunReplays does not expose StartReplayBySeed. Rebuild/install the updated RunReplays fork.");
-                result = method.Invoke(null, [seed, floor]);
+                if (startFloor.HasValue)
+                {
+                    method = replayMenuType.GetMethod(
+                        "StartReplayFromFloorBySeed",
+                        BindingFlags.Public | BindingFlags.Static);
+                    if (method == null)
+                        return Error("RunReplays does not expose StartReplayFromFloorBySeed. Rebuild/install the updated RunReplays fork.");
+                    result = method.Invoke(null, [seed, floor!.Value, startFloor.Value]);
+                }
+                else
+                {
+                    method = replayMenuType.GetMethod(
+                        "StartReplayBySeed",
+                        BindingFlags.Public | BindingFlags.Static);
+                    if (method == null)
+                        return Error("RunReplays does not expose StartReplayBySeed. Rebuild/install the updated RunReplays fork.");
+                    result = method.Invoke(null, [seed, floor]);
+                }
             }
         }
         catch (TargetInvocationException ex)
@@ -182,5 +233,18 @@ public static partial class McpMod
     {
         object? value = source.GetType().GetProperty(propertyName)?.GetValue(source);
         return value is DateTime dateTime ? dateTime : null;
+    }
+
+    private static List<string> ReadStringEnumerableProperty(object source, string propertyName)
+    {
+        object? value = source.GetType().GetProperty(propertyName)?.GetValue(source);
+        if (value is not System.Collections.IEnumerable enumerable)
+            return [];
+        return enumerable
+            .Cast<object?>()
+            .Select(item => item?.ToString())
+            .Where(item => !string.IsNullOrEmpty(item))
+            .Cast<string>()
+            .ToList();
     }
 }

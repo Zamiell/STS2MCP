@@ -1128,11 +1128,16 @@ Start a recorded run replay through the RunReplays mod. RunReplays must be insta
 { "action": "start_replay", "seed": "LFKFUEPCRA", "floor": 49 }
 ```
 
+```json
+{ "action": "start_replay", "seed": "LFKFUEPCRA", "start_floor": 22, "floor": 28 }
+```
+
 | Parameter | Type | Required | Description |
 |---|---|---|---|
 | `target` | string | No | Compact replay target. Use `SEED` for the highest available floor, or `SEED:floor_N` for a specific floor. |
 | `seed` | string | No | Replay seed to launch. Required when `target` is omitted. |
 | `floor` | int | No | Optional floor number to replay to for `seed`. If omitted, the highest available floor for the seed is used. |
+| `start_floor` | int | No | Optional saved floor to load before replaying to `floor`. Requires `seed` and `floor`. Useful for save-scoped RunReplays logs. |
 
 The response includes `seed`, `floor`, `character_id`, `ascension`, and `log_path` when RunReplays accepts the request. If RunReplays is not loaded, the action returns an error.
 

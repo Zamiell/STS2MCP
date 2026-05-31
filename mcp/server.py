@@ -225,18 +225,23 @@ async def get_replays() -> str:
 
 @mcp.tool()
 async def start_replay(
-    seed: str | None = None, floor: int | None = None, target: str | None = None
+    seed: str | None = None,
+    floor: int | None = None,
+    target: str | None = None,
+    start_floor: int | None = None,
 ) -> str:
     """Start a RunReplays replay from the main menu.
 
     Requires the RunReplays mod to be installed and enabled alongside STS2_MCP.
-    Use either `target` in the form "SEED" or "SEED:floor_N", or provide
-    `seed` with an optional numeric `floor`.
+    Use either `target` in the form "SEED" or "SEED:floor_N", provide
+    `seed` with an optional numeric `floor`, or provide `seed`, `floor`, and
+    `start_floor` to load a saved floor and replay the remaining commands.
 
     Args:
         seed: Replay seed to launch.
         floor: Optional floor number to replay to for that seed.
         target: Optional compact target string, e.g. "ABC123:floor_12".
+        start_floor: Optional saved floor to load before replaying to `floor`.
     """
     body: dict = {"action": "start_replay"}
     if target is not None:
@@ -245,6 +250,8 @@ async def start_replay(
         body["seed"] = seed
     if floor is not None:
         body["floor"] = floor
+    if start_floor is not None:
+        body["start_floor"] = start_floor
     try:
         return await _post(body)
     except Exception as e:
