@@ -210,6 +210,34 @@ async def menu_select(option: str, seed: str | None = None) -> str:
 
 
 @mcp.tool()
+async def start_replay(
+    seed: str | None = None, floor: int | None = None, target: str | None = None
+) -> str:
+    """Start a RunReplays replay from the main menu.
+
+    Requires the RunReplays mod to be installed and enabled alongside STS2_MCP.
+    Use either `target` in the form "SEED" or "SEED:floor_N", or provide
+    `seed` with an optional numeric `floor`.
+
+    Args:
+        seed: Replay seed to launch.
+        floor: Optional floor number to replay to for that seed.
+        target: Optional compact target string, e.g. "ABC123:floor_12".
+    """
+    body: dict = {"action": "start_replay"}
+    if target is not None:
+        body["target"] = target
+    if seed is not None:
+        body["seed"] = seed
+    if floor is not None:
+        body["floor"] = floor
+    try:
+        return await _post(body)
+    except Exception as e:
+        return _handle_error(e)
+
+
+@mcp.tool()
 async def debug_start_encounter(encounter: str) -> str:
     """Start a specific encounter immediately in the active singleplayer run.
 
@@ -973,7 +1001,9 @@ async def mp_rewards_pick_card(card_index: int) -> str:
         card_index: 0-based index of the card to add to the deck.
     """
     try:
-        return await _mp_post({"action": "select_card_reward", "card_index": card_index})
+        return await _mp_post(
+            {"action": "select_card_reward", "card_index": card_index}
+        )
     except Exception as e:
         return _handle_error(e)
 
@@ -1069,7 +1099,9 @@ async def mp_combat_select_card(card_index: int) -> str:
         card_index: 0-based index of the card in the selectable hand cards.
     """
     try:
-        return await _mp_post({"action": "combat_select_card", "card_index": card_index})
+        return await _mp_post(
+            {"action": "combat_select_card", "card_index": card_index}
+        )
     except Exception as e:
         return _handle_error(e)
 
@@ -1160,8 +1192,14 @@ async def mp_crystal_sphere_proceed() -> str:
 def main():
     parser = argparse.ArgumentParser(description="STS2 MCP Server")
     parser.add_argument("--port", type=int, default=15526, help="Game HTTP server port")
-    parser.add_argument("--host", type=str, default="localhost", help="Game HTTP server host")
-    parser.add_argument("--no-trust-env", action="store_true", help="Ignore HTTP_PROXY/HTTPS_PROXY environment variables")
+    parser.add_argument(
+        "--host", type=str, default="localhost", help="Game HTTP server host"
+    )
+    parser.add_argument(
+        "--no-trust-env",
+        action="store_true",
+        help="Ignore HTTP_PROXY/HTTPS_PROXY environment variables",
+    )
     args = parser.parse_args()
 
     global _base_url, _trust_env

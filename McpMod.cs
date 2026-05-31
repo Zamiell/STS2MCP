@@ -469,6 +469,21 @@ public static partial class McpMod
             return;
         }
 
+        if (action == "start_replay")
+        {
+            try
+            {
+                var resultTask = RunOnMainThread(() => ExecuteStartReplay(parsed));
+                var result = resultTask.GetAwaiter().GetResult();
+                SendJson(response, result);
+            }
+            catch (Exception ex)
+            {
+                SendError(response, 500, $"Replay action failed: {ex.Message}");
+            }
+            return;
+        }
+
         try
         {
             var resultTask = RunOnMainThread(() => ExecuteAction(action, parsed));

@@ -1097,6 +1097,28 @@ Use this before `menu_select` with `abandon_run` when replacing an in-progress r
 
 ---
 
+### `start_replay`
+
+Start a recorded run replay through the RunReplays mod. RunReplays must be installed and enabled in the same game process.
+
+```json
+{ "action": "start_replay", "target": "LFKFUEPCRA:floor_49" }
+```
+
+```json
+{ "action": "start_replay", "seed": "LFKFUEPCRA", "floor": 49 }
+```
+
+| Parameter | Type | Required | Description |
+|---|---|---|---|
+| `target` | string | No | Compact replay target. Use `SEED` for the highest available floor, or `SEED:floor_N` for a specific floor. |
+| `seed` | string | No | Replay seed to launch. Required when `target` is omitted. |
+| `floor` | int | No | Optional floor number to replay to for `seed`. If omitted, the highest available floor for the seed is used. |
+
+The response includes `seed`, `floor`, `character_id`, `ascension`, and `log_path` when RunReplays accepts the request. If RunReplays is not loaded, the action returns an error.
+
+---
+
 ### `debug_start_encounter`
 
 Start a specific encounter immediately in the active singleplayer run. This is intended for validation/debug workflows.
