@@ -16,6 +16,8 @@ public static partial class McpMod
             .FirstOrDefault(type => type != null);
     }
 
+    [McpAction("get_replays", "Legacy RunReplays", "List replay floors discoverable through the external RunReplays mod.")]
+    [McpActionNote("Legacy/external interop: requires RunReplays to be installed and enabled. Prefer STS2MCP .replay recording for new replay data.")]
     private static Dictionary<string, object?> ExecuteGetReplays()
     {
         Type? replayMenuType = GetRunReplayMenuType();
@@ -85,6 +87,8 @@ public static partial class McpMod
         };
     }
 
+    [McpAction("get_replay_status", "Legacy RunReplays", "Read the current external RunReplays playback status.")]
+    [McpActionNote("Legacy/external interop: requires RunReplays to be installed and enabled.")]
     private static Dictionary<string, object?> ExecuteGetReplayStatus()
     {
         Type? replayEngineType = AppDomain.CurrentDomain
@@ -121,6 +125,12 @@ public static partial class McpMod
         };
     }
 
+    [McpAction("start_replay", "Legacy RunReplays", "Start playback through the external RunReplays mod.")]
+    [McpActionField("target", "string", false, "Compact replay target, such as SEED or SEED:floor_N.")]
+    [McpActionField("seed", "string", false, "Replay seed to launch when target is omitted.")]
+    [McpActionField("floor", "int", false, "Optional floor number to replay to for seed.")]
+    [McpActionField("start_floor", "int", false, "Optional saved floor to load before replaying to floor; requires seed and floor.")]
+    [McpActionNote("Legacy/external interop: requires RunReplays to be installed and enabled. Prefer STS2MCP .replay recording for new replay data.")]
     private static Dictionary<string, object?> ExecuteStartReplay(
         Dictionary<string, JsonElement> data)
     {

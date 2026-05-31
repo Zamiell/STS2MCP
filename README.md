@@ -55,7 +55,7 @@ curl -s http://localhost:15526/
 A successful response looks like:
 
 ```json
-{"message": "Hello from STS2 MCP v0.3.4", "status": "ok"}
+{ "message": "Hello from STS2 MCP v0.3.4", "status": "ok" }
 ```
 
 If you get "Connection refused", the mod is not loaded — check that mods are enabled in the game's settings.
@@ -64,9 +64,9 @@ If you get "Connection refused", the mod is not loaded — check that mods are e
 
 **Clone or download the repository**, then:
 
-| I prefer a skill | I prefer an MCP Server |
-|---|---|
-| Tell AI to reference docs/raw-*.md. Sit back, and watch it play. | Requires [Python 3.11+](https://www.python.org/) and [uv](https://docs.astral.sh/uv/). Follow the instructions below ⬇️ |
+| I prefer a skill                                                   | I prefer an MCP Server                                                                                                  |
+| ------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------- |
+| Tell AI to reference docs/actions.md. Sit back, and watch it play. | Requires [Python 3.11+](https://www.python.org/) and [uv](https://docs.astral.sh/uv/). Follow the instructions below ⬇️ |
 
 #### MCP server setup
 
@@ -85,7 +85,13 @@ Add the server to your AI client's MCP config:
   "mcpServers": {
     "sts2": {
       "command": "uv",
-      "args": ["run", "--directory", "/path/to/STS2_MCP/mcp", "python", "server.py"]
+      "args": [
+        "run",
+        "--directory",
+        "/path/to/STS2_MCP/mcp",
+        "python",
+        "server.py"
+      ]
     }
   }
 }
@@ -93,7 +99,7 @@ Add the server to your AI client's MCP config:
 
 **Claude Code**: add to your project's `.mcp.json`.
 **Claude Desktop**: add to `claude_desktop_config.json` with the same config as above.
-*Other agents should have similar config options for custom MCP servers.*
+_Other agents should have similar config options for custom MCP servers._
 
 > [!tip]
 > On macOS, use the absolute path to `uv` (e.g. `/opt/homebrew/bin/uv`) in the `command` field. GUI-launched apps may not inherit your shell's `PATH`, which would prevent the server from starting.
@@ -103,6 +109,14 @@ Restart your Claude session after adding the config. To verify the MCP server is
 The MCP server accepts `--host` and `--port` options if you need non-default settings.
 
 Flag `--no-trust-env` can be used to disable `requests` from picking up proxy settings from the environment, which can cause connection issues if you are running the server in a container.
+
+### Replay Recording
+
+STS2MCP records successful singleplayer API commands to a `.replay` file for the active run. Replay files are newline-delimited JSON: each line is the original command payload that was accepted by the HTTP API, in order.
+
+Files are written under the game user-data directory at `STS2MCP/replays/`, with names in the form `{seed}_{yyyyMMdd_HHmmss}.replay`, where the timestamp comes from the run's saved `start_time`.
+
+Commands issued before the run save exists, such as the `menu_select` sequence that starts a seeded run, are buffered and flushed once STS2MCP can read the run seed and start time.
 
 ### Profile and Compendium Data
 
@@ -183,7 +197,7 @@ cp out/STS2_MCP/STS2_MCP.dll "$MODS_DIR/"
 cp mod_manifest.json "$MODS_DIR/STS2_MCP.json"
 ```
 
-> [!NOTE] 
+> [!NOTE]
 > `mod_manifest.json` is renamed to `STS2_MCP.json` on copy — the game's mod loader expects the manifest filename to match the mod ID.
 
 ## License

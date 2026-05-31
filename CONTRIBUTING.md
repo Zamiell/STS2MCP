@@ -8,7 +8,7 @@ By participating, you agree to follow the [Code of Conduct](CODE_OF_CONDUCT.md).
 
 - **Bug fixes.** Reproducible reports with a referenced issue or a clear in-game repro.
 - **Features and new API endpoints.** New state fields, new actions, new screens — please [open a Discussion or issue first](#discussion-first-for-non-trivial-changes) so we can align on scope before you write the PR.
-- **Docs.** README, the `docs/raw-*.md` reference, fixes to copy or examples. Doc-only PRs don't need a build.
+- **Docs.** README, the generated `docs/actions.md` reference, fixes to copy or examples. Doc-only PRs don't need a build.
 
 ### What's better as a Discussion than a PR
 
@@ -30,7 +30,7 @@ Run through this checklist for any non-trivial change:
 - [ ] **Clean build.** `./build.ps1 -GameDir "<your game path>"` (or `dotnet build` on macOS/Linux — see [README](README.md#build-instructions-for-macos)) returns zero warnings, zero errors.
 - [ ] **Manual in-game smoke test.** Launch the game with the mod installed and exercise the affected feature path. Most of this codebase can't be unit-tested — your manual check is the test.
 - [ ] **Tested against the latest stable game version.** The version we currently target is listed in the README's "Tested against" line. If a new game patch broke something, that's a separate issue worth filing.
-- [ ] **Docs updated.** If you added or changed an API field/action, update `docs/raw-full.md` and `docs/raw-simplified.md` in the same PR. The MCP server docstrings (`mcp/server.py`) often need a touch too.
+- [ ] **Docs updated.** If you added or changed API behavior, update the C# metadata attributes and regenerate `docs/actions.md` in the same PR. The MCP server docstrings (`mcp/server.py`) often need a touch too.
 
 ## Workflow
 
