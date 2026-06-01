@@ -176,7 +176,11 @@ async def get_game_state(format: str = "markdown") -> str:
 
 
 @mcp.tool()
-async def menu_select(option: str, seed: str | None = None) -> str:
+async def menu_select(
+    option: str,
+    seed: str | None = None,
+    ascension: int | None = None,
+) -> str:
     """Select a visible menu option.
 
     Use with state_type "menu" or "game_over". Covers main-menu navigation,
@@ -199,10 +203,13 @@ async def menu_select(option: str, seed: str | None = None) -> str:
             option is listed under blocked_options, selecting it returns the
             API's manual-action response instead of forcing UI entry.
         seed: Optional seed for supported embark flows. Standard mode rejects seeds.
+        ascension: Optional ascension level for character-select embark.
     """
     body: dict = {"action": "menu_select", "option": option}
     if seed is not None:
         body["seed"] = seed
+    if ascension is not None:
+        body["ascension"] = ascension
     try:
         return await _post(body)
     except Exception as e:

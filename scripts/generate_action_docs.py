@@ -11,6 +11,7 @@ from pathlib import Path
 SOURCE_FILES = (
     "McpMod.Actions.cs",
     "McpMod.MultiplayerActions.cs",
+    "McpMod.ReplayPlayback.cs",
 )
 DOCUMENTATION_FILES = ("McpApiDocumentation.cs",)
 

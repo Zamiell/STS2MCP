@@ -136,6 +136,8 @@ public static partial class McpMod
         }
 
         MaybeEnsureReplayFileForCurrentRun();
+        MaybeFlushCompletedCombatReplay();
+        ProcessReplayPlayback();
     }
 
     internal static Task<T> RunOnMainThread<T>(Func<T> func)
@@ -453,6 +455,21 @@ public static partial class McpMod
 
         string action = actionElem.GetString() ?? "";
 
+        if (action is "start_replay" or "get_replay_status" or "cancel_replay")
+        {
+            try
+            {
+                var resultTask = RunOnMainThread(() => ExecuteReplayControlAction(action, parsed));
+                var result = resultTask.GetAwaiter().GetResult();
+                SendJson(response, result);
+            }
+            catch (Exception ex)
+            {
+                SendError(response, 500, $"Replay action failed: {ex.Message}");
+            }
+            return;
+        }
+
         // Handle menu actions separately (no run required)
         if (action == "menu_select")
         {
@@ -460,9 +477,13 @@ public static partial class McpMod
             {
                 var option = parsed.TryGetValue("option", out var optElem) ? optElem.GetString() ?? "" : "";
                 var seed = parsed.TryGetValue("seed", out var seedElem) ? seedElem.GetString() : null;
+                var ascension = parsed.TryGetValue("ascension", out var ascensionElem)
+                                && ascensionElem.TryGetInt32(out var ascensionValue)
+                    ? ascensionValue
+                    : (int?)null;
                 var resultTask = RunOnMainThread(() =>
                 {
-                    var result = ExecuteMenuSelect(option, seed);
+                    var result = ExecuteMenuSelect(option, seed, ascension);
                     RecordReplayCommandIfSuccessful(parsed, result);
                     return result;
                 });

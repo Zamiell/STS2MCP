@@ -100,7 +100,7 @@ All POST bodies use an `action` field. Successful responses include `status: ok`
 
 ## Replay Recording
 
-STS2MCP records successful singleplayer API commands to a `.replay` file for the active run. Replay files are newline-delimited JSON: each line is the original command payload accepted by the HTTP API. Files are written under the game user-data directory at `STS2MCP/replays/` with names in the form `{seed}_{yyyyMMdd_HHmmss}.replay`, where the timestamp comes from the run's saved `start_time`. Commands issued before the run save exists, such as the `menu_select` sequence that starts a seeded run, are buffered and flushed once STS2MCP can read the run seed and start time.
+STS2MCP writes `.replay` files for active singleplayer runs. Replay files are newline-delimited JSON commands that can be sent back to the HTTP API. For runs started through the in-game UI, STS2MCP observes `current_run.save` and writes the seeded startup sequence, Neow choice, and map/reward choices once those decisions are visible in the save. Combat commands are observed as the player acts, held in memory during the fight, and appended only after combat ends so closing and reopening mid-combat leaves the replay at the pre-combat state. Files are written under the game user-data directory at `STS2MCP/replays/` with names in the form `{seed}_{yyyyMMdd_HHmmss}.replay`, where the timestamp comes from the run's saved `start_time`.
 
 ## Multiplayer Additions
 
@@ -221,10 +221,11 @@ Travel to an available map node.
 
 Select a menu, popup, character-select, or FTUE option.
 
-| Field    | Type     | Required | Description                                |
-| -------- | -------- | -------- | ------------------------------------------ |
-| `option` | `string` | yes      | Option id or advertised menu option.       |
-| `seed`   | `string` | no       | Optional custom seed for character select. |
+| Field       | Type     | Required | Description                                           |
+| ----------- | -------- | -------- | ----------------------------------------------------- |
+| `option`    | `string` | yes      | Option id or advertised menu option.                  |
+| `seed`      | `string` | no       | Optional custom seed for character select.            |
+| `ascension` | `int`    | no       | Optional ascension level for character select embark. |
 
 ### Multiplayer
 
@@ -248,6 +249,32 @@ Press the active proceed button.
 
 No fields.
 
+### Replay
+
+#### `cancel_replay`
+
+Cancel the active replay playback.
+
+No fields.
+
+#### `get_replay_status`
+
+Get the current replay playback status.
+
+No fields.
+
+#### `start_replay`
+
+Start playing a newline-delimited JSON replay file.
+
+| Field                     | Type     | Required | Description                                                                        |
+| ------------------------- | -------- | -------- | ---------------------------------------------------------------------------------- |
+| `path`                    | `string` | no       | Absolute replay file path, or file name under the STS2MCP replay directory.        |
+| `name`                    | `string` | no       | Replay file name under the STS2MCP replay directory.                               |
+| `force`                   | `bool`   | no       | Cancel any currently running replay before starting this one.                      |
+| `return_to_main_menu`     | `bool`   | no       | Return to the main menu before playing the first replay command. Defaults to true. |
+| `command_timeout_seconds` | `number` | no       | Maximum time to wait for each replay command to become valid. Defaults to 30.      |
+
 ### Rest
 
 #### `choose_rest_option`
@@ -268,6 +295,17 @@ Claim a reward from the rewards screen.
 | ------- | ----- | -------- | ------------------------------- |
 | `index` | `int` | yes      | 0-based claimable reward index. |
 
+#### `claim_reward_by_match`
+
+Claim a reward by stable reward identity.
+
+| Field         | Type     | Required | Description                                                      |
+| ------------- | -------- | -------- | ---------------------------------------------------------------- |
+| `type`        | `string` | yes      | Reward type, such as gold, potion, relic, card, or special_card. |
+| `gold_amount` | `int`    | no       | Gold amount to match for gold rewards.                           |
+| `potion_id`   | `string` | no       | Potion id to match for potion rewards.                           |
+| `relic_id`    | `string` | no       | Relic id to match for relic rewards.                             |
+
 #### `select_card_reward`
 
 Select a card from the card reward screen.
@@ -275,6 +313,14 @@ Select a card from the card reward screen.
 | Field        | Type  | Required | Description                |
 | ------------ | ----- | -------- | -------------------------- |
 | `card_index` | `int` | yes      | 0-based card reward index. |
+
+#### `select_card_reward_by_id`
+
+Select a card from the card reward screen by id.
+
+| Field     | Type     | Required | Description                                     |
+| --------- | -------- | -------- | ----------------------------------------------- |
+| `card_id` | `string` | yes      | Card id to select from the current card reward. |
 
 #### `skip_card_reward`
 
@@ -337,6 +383,15 @@ Select or toggle a card in the active card selection screen.
 | Field   | Type  | Required | Description                                        |
 | ------- | ----- | -------- | -------------------------------------------------- |
 | `index` | `int` | yes      | 0-based card index in the active selection screen. |
+
+#### `select_deck_card`
+
+Select or toggle a deck card in the active card selection screen.
+
+| Field        | Type     | Required | Description                                             |
+| ------------ | -------- | -------- | ------------------------------------------------------- |
+| `deck_index` | `int`    | yes      | 0-based card index in the current deck.                 |
+| `card_id`    | `string` | no       | Optional card id assertion for the selected deck index. |
 
 #### `select_relic`
 

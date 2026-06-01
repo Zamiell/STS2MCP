@@ -112,11 +112,13 @@ Flag `--no-trust-env` can be used to disable `requests` from picking up proxy se
 
 ### Replay Recording
 
-STS2MCP records successful singleplayer API commands to a `.replay` file for the active run. Replay files are newline-delimited JSON: each line is the original command payload that was accepted by the HTTP API, in order.
+STS2MCP writes a `.replay` file for the active singleplayer run. Replay files are newline-delimited JSON commands that can be sent back to the HTTP API.
+
+For runs started through the in-game UI, STS2MCP observes `current_run.save` and writes the seeded startup sequence, Neow choice, and map/reward choices once those decisions are visible in the save. Combat commands are observed as the player acts, held in memory during the fight, and appended only after combat ends. This matches the game's save behavior: closing and reopening mid-combat resets to the beginning of that combat, so unfinished combat actions are not persisted to the replay.
 
 Files are written under the game user-data directory at `STS2MCP/replays/`, with names in the form `{seed}_{yyyyMMdd_HHmmss}.replay`, where the timestamp comes from the run's saved `start_time`.
 
-Commands issued before the run save exists, such as the `menu_select` sequence that starts a seeded run, are buffered and flushed once STS2MCP can read the run seed and start time.
+Commands issued through STS2MCP before the run save exists are buffered and flushed once STS2MCP can read the run seed and start time.
 
 ### Profile and Compendium Data
 

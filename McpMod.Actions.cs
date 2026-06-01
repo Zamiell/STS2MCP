@@ -78,10 +78,13 @@ public static partial class McpMod
             "choose_rest_option" => ExecuteChooseRestOption(data),
             "shop_purchase" => ExecuteShopPurchase(player, data),
             "claim_reward" => ExecuteClaimReward(data),
+            "claim_reward_by_match" => ExecuteClaimRewardByMatch(data),
             "select_card_reward" => ExecuteSelectCardReward(data),
+            "select_card_reward_by_id" => ExecuteSelectCardRewardById(data),
             "skip_card_reward" => ExecuteSkipCardReward(),
             "proceed" => ExecuteProceed(),
             "select_card" => ExecuteSelectCard(data),
+            "select_deck_card" => ExecuteSelectDeckCard(player, data),
             "confirm_selection" => ExecuteConfirmSelection(),
             "cancel_selection" => ExecuteCancelSelection(),
             "select_bundle" => ExecuteSelectBundle(data),
@@ -286,10 +289,31 @@ public static partial class McpMod
         if (hand == null)
             return Error("No hand available");
 
-        if (cardIndex < 0 || cardIndex >= hand.Cards.Count)
-            return Error($"card_index {cardIndex} out of range (hand has {hand.Cards.Count} cards)");
+        var requestedCardId = data.TryGetValue("card_id", out var cardIdElem)
+            ? cardIdElem.GetString()
+            : null;
 
-        var card = hand.Cards[cardIndex];
+        CardModel? card = null;
+        if (cardIndex >= 0 && cardIndex < hand.Cards.Count)
+            card = hand.Cards[cardIndex];
+
+        if (card == null
+            || !ReplayCardMatches(card, requestedCardId)
+            || !card.CanPlay(out _, out _))
+        {
+            if (!TryFindReplayCardInHand(hand, requestedCardId, out var resolvedIndex, out var resolvedCard))
+            {
+                if (cardIndex < 0 || cardIndex >= hand.Cards.Count)
+                    return Error($"card_index {cardIndex} out of range (hand has {hand.Cards.Count} cards)");
+
+                card = hand.Cards[cardIndex];
+            }
+            else
+            {
+                cardIndex = resolvedIndex;
+                card = resolvedCard;
+            }
+        }
 
         if (!card.CanPlay(out var reason, out _))
             return Error($"Card '{card.Title}' cannot be played: {reason}");
@@ -315,6 +339,43 @@ public static partial class McpMod
             ["status"] = "ok",
             ["message"] = $"Playing '{card.Title}'" + (target != null ? $" targeting {SafeGetText(() => target.Monster?.Title) ?? "target"}" : "")
         };
+    }
+
+    private static bool TryFindReplayCardInHand(
+        CardPile hand,
+        string? requestedCardId,
+        out int cardIndex,
+        out CardModel card)
+    {
+        cardIndex = -1;
+        card = null!;
+
+        if (string.IsNullOrWhiteSpace(requestedCardId))
+            return false;
+
+        for (var i = 0; i < hand.Cards.Count; i++)
+        {
+            var candidate = hand.Cards[i];
+            if (!ReplayCardMatches(candidate, requestedCardId))
+                continue;
+
+            if (!candidate.CanPlay(out _, out _))
+                continue;
+
+            cardIndex = i;
+            card = candidate;
+            return true;
+        }
+
+        return false;
+    }
+
+    private static bool ReplayCardMatches(CardModel card, string? requestedCardId)
+    {
+        if (string.IsNullOrWhiteSpace(requestedCardId))
+            return true;
+
+        return CardIdMatches(card, requestedCardId);
     }
 
     [McpAction("end_turn", "Combat", "End the player's combat turn.")]
@@ -679,6 +740,72 @@ public static partial class McpMod
         };
     }
 
+    [McpAction("claim_reward_by_match", "Reward", "Claim a reward by stable reward identity.")]
+    [McpActionField("type", "string", true, "Reward type, such as gold, potion, relic, card, or special_card.")]
+    [McpActionField("gold_amount", "int", false, "Gold amount to match for gold rewards.")]
+    [McpActionField("potion_id", "string", false, "Potion id to match for potion rewards.")]
+    [McpActionField("relic_id", "string", false, "Relic id to match for relic rewards.")]
+    private static Dictionary<string, object?> ExecuteClaimRewardByMatch(Dictionary<string, JsonElement> data)
+    {
+        var overlay = NOverlayStack.Instance?.Peek();
+        if (overlay is not NRewardsScreen rewardsScreen)
+            return Error("Rewards screen is not open");
+
+        if (!data.TryGetValue("type", out var typeElem))
+            return Error("Missing 'type' (reward type)");
+
+        var requestedType = typeElem.GetString() ?? "";
+        var enabledButtons = FindAll<NRewardButton>(rewardsScreen)
+            .Where(b => b.IsEnabled && b.Reward != null)
+            .ToList();
+
+        foreach (var button in enabledButtons)
+        {
+            var reward = button.Reward!;
+            if (!string.Equals(GetRewardTypeName(reward), requestedType, StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            if (!RewardMatches(reward, data))
+                continue;
+
+            button.ForceClick();
+            return new Dictionary<string, object?>
+            {
+                ["status"] = "ok",
+                ["message"] = $"Claiming matching reward: {requestedType}"
+            };
+        }
+
+        return Error($"No matching reward found for type '{requestedType}'");
+    }
+
+    private static bool RewardMatches(Reward reward, Dictionary<string, JsonElement> data)
+    {
+        if (data.TryGetValue("gold_amount", out var goldElem)
+            && reward is GoldReward goldReward
+            && goldElem.TryGetInt32(out var expectedGold)
+            && goldReward.Amount != expectedGold)
+            return false;
+
+        if (data.TryGetValue("potion_id", out var potionElem)
+            && reward is PotionReward potionReward)
+        {
+            var expectedPotion = potionElem.GetString();
+            if (!string.Equals(potionReward.Potion?.Id.Entry, expectedPotion, StringComparison.OrdinalIgnoreCase))
+                return false;
+        }
+
+        if (data.TryGetValue("relic_id", out var relicElem)
+            && reward is RelicReward relicReward)
+        {
+            var expectedRelic = relicElem.GetString();
+            if (!string.Equals(relicReward.Relic?.Id.Entry, expectedRelic, StringComparison.OrdinalIgnoreCase))
+                return false;
+        }
+
+        return true;
+    }
+
     [McpAction("select_card_reward", "Reward", "Select a card from the card reward screen.")]
     [McpActionField("card_index", "int", true, "0-based card reward index.")]
     private static Dictionary<string, object?> ExecuteSelectCardReward(Dictionary<string, JsonElement> data)
@@ -705,6 +832,34 @@ public static partial class McpMod
             ["status"] = "ok",
             ["message"] = $"Selecting card: {cardName}"
         };
+    }
+
+    [McpAction("select_card_reward_by_id", "Reward", "Select a card from the card reward screen by id.")]
+    [McpActionField("card_id", "string", true, "Card id to select from the current card reward.")]
+    private static Dictionary<string, object?> ExecuteSelectCardRewardById(Dictionary<string, JsonElement> data)
+    {
+        var overlay = NOverlayStack.Instance?.Peek();
+        if (overlay is not NCardRewardSelectionScreen cardScreen)
+            return Error("Card reward selection screen is not open");
+
+        if (!data.TryGetValue("card_id", out var cardIdElem))
+            return Error("Missing 'card_id'");
+
+        var cardId = cardIdElem.GetString() ?? "";
+        foreach (var holder in FindAllSortedByPosition<NCardHolder>(cardScreen))
+        {
+            if (holder.CardModel == null || !CardIdMatches(holder.CardModel, cardId))
+                continue;
+
+            holder.EmitSignal(NCardHolder.SignalName.Pressed, holder);
+            return new Dictionary<string, object?>
+            {
+                ["status"] = "ok",
+                ["message"] = $"Selecting card: {cardId}"
+            };
+        }
+
+        return Error($"Card reward does not contain '{cardId}'");
     }
 
     [McpAction("skip_card_reward", "Reward", "Skip the current card reward.")]
@@ -785,6 +940,22 @@ public static partial class McpMod
                     return new Dictionary<string, object?> { ["status"] = "ok", ["message"] = "Proceeding from fake merchant" };
                 }
             }
+
+            var eventProceed = FindAll<NEventOptionButton>(evtRoom)
+                .FirstOrDefault(button =>
+                    button.Option.IsProceed
+                    && !button.Option.IsLocked
+                    && button.IsEnabled
+                    && IsNodeVisible(button));
+            if (eventProceed != null)
+            {
+                var title = SafeGetText(() => eventProceed.Option.Title) ?? "Proceed";
+                eventProceed.ForceClick();
+                return new Dictionary<string, object?> { ["status"] = "ok", ["message"] = $"Proceeding from event: {title}" };
+            }
+
+            if (FindAll<NEventOptionButton>(evtRoom).Any(button => button.Option.IsProceed && !button.Option.IsLocked))
+                return Error("Event proceed option is not ready yet");
         }
 
         // Try treasure room
@@ -848,6 +1019,54 @@ public static partial class McpMod
         }
 
         return Error("No card selection screen is open");
+    }
+
+    [McpAction("select_deck_card", "Selection", "Select or toggle a deck card in the active card selection screen.")]
+    [McpActionField("deck_index", "int", true, "0-based card index in the current deck.")]
+    [McpActionField("card_id", "string", false, "Optional card id assertion for the selected deck index.")]
+    private static Dictionary<string, object?> ExecuteSelectDeckCard(Player player, Dictionary<string, JsonElement> data)
+    {
+        var overlay = NOverlayStack.Instance?.Peek();
+        if (overlay is not NCardGridSelectionScreen gridScreen)
+            return Error("No deck card selection screen is open");
+
+        if (!data.TryGetValue("deck_index", out var deckIndexElem))
+            return Error("Missing 'deck_index'");
+
+        var deckIndex = deckIndexElem.GetInt32();
+        if (deckIndex < 0 || deckIndex >= player.Deck.Cards.Count)
+            return Error($"deck_index {deckIndex} out of range (deck has {player.Deck.Cards.Count} cards)");
+
+        var card = player.Deck.Cards[deckIndex];
+        if (data.TryGetValue("card_id", out var cardIdElem)
+            && !CardIdMatches(card, cardIdElem.GetString() ?? ""))
+        {
+            return Error($"deck_index {deckIndex} is '{card.Id}', not '{cardIdElem.GetString()}'");
+        }
+
+        var grid = FindFirst<NCardGrid>(gridScreen);
+        if (grid == null)
+            return Error("Card grid not found in selection screen");
+
+        var holder = FindAllSortedByPosition<NGridCardHolder>(gridScreen)
+            .FirstOrDefault(candidate => ReferenceEquals(candidate.CardModel, card));
+        if (holder == null)
+            return Error($"Deck card at index {deckIndex} is not selectable on the active screen");
+
+        string cardName = SafeGetText(() => holder.CardModel?.Title) ?? card.Id.ToString();
+        grid.EmitSignal(NCardGrid.SignalName.HolderPressed, holder);
+
+        return new Dictionary<string, object?>
+        {
+            ["status"] = "ok",
+            ["message"] = $"Toggling deck card selection: {cardName}"
+        };
+    }
+
+    private static bool CardIdMatches(CardModel card, string cardId)
+    {
+        return string.Equals(card.Id.ToString(), cardId, StringComparison.OrdinalIgnoreCase)
+               || string.Equals(card.Id.Entry, cardId, StringComparison.OrdinalIgnoreCase);
     }
 
     [McpAction("confirm_selection", "Selection", "Confirm the active card selection screen.")]
@@ -1293,7 +1512,11 @@ public static partial class McpMod
     [McpAction("menu_select", "Menu", "Select a menu, popup, character-select, or FTUE option.")]
     [McpActionField("option", "string", true, "Option id or advertised menu option.")]
     [McpActionField("seed", "string", false, "Optional custom seed for character select.")]
-    internal static Dictionary<string, object?> ExecuteMenuSelect(string option, string? seed = null)
+    [McpActionField("ascension", "int", false, "Optional ascension level for character select embark.")]
+    internal static Dictionary<string, object?> ExecuteMenuSelect(
+        string option,
+        string? seed = null,
+        int? ascension = null)
     {
         option = option.Trim();
 
@@ -1505,7 +1728,7 @@ public static partial class McpMod
         var charSelect = FindFirst<NCharacterSelectScreen>(tree.Root);
         if (charSelect != null && IsNodeVisible(charSelect))
         {
-            return ExecuteCharacterSelectMenuOption(charSelect, option, seed);
+            return ExecuteCharacterSelectMenuOption(charSelect, option, seed, ascension);
         }
 
         var profileScreen = FindFirst<NProfileScreen>(tree.Root);
@@ -1796,7 +2019,8 @@ public static partial class McpMod
     private static Dictionary<string, object?> ExecuteCharacterSelectMenuOption(
         NCharacterSelectScreen charSelect,
         string option,
-        string? seed)
+        string? seed,
+        int? ascension)
     {
         if (string.Equals(option, "back", System.StringComparison.OrdinalIgnoreCase))
         {
@@ -1834,6 +2058,15 @@ public static partial class McpMod
         if (string.Equals(option, "confirm", System.StringComparison.OrdinalIgnoreCase) ||
             string.Equals(option, "embark", System.StringComparison.OrdinalIgnoreCase))
         {
+            if (ascension.HasValue)
+            {
+                if (charSelect.Lobby == null)
+                    return Error("Ascension embark failed before starting the run: character select lobby is unavailable.");
+
+                if (!TrySetLobbyAscension(charSelect.Lobby, ascension.Value, out var error))
+                    return Error(error);
+            }
+
             if (!string.IsNullOrWhiteSpace(seed))
             {
                 seed = seed.Trim();
@@ -1878,6 +2111,7 @@ public static partial class McpMod
         foreach (var btn in buttons)
         {
             if (btn.Character != null && (
+                string.Equals(btn.Character.Id.ToString(), option, System.StringComparison.OrdinalIgnoreCase) ||
                 string.Equals(btn.Character.Id.Entry, option, System.StringComparison.OrdinalIgnoreCase) ||
                 string.Equals(SafeGetText(() => btn.Character.Title), option, System.StringComparison.OrdinalIgnoreCase)))
             {
@@ -1888,6 +2122,48 @@ public static partial class McpMod
             }
         }
         return Error($"Character '{option}' not found. Available: {string.Join(", ", buttons.Where(b => !b.IsLocked).Select(b => b.Character?.Id.Entry))}");
+    }
+
+    private static bool TrySetLobbyAscension(object lobby, int ascension, out string error)
+    {
+        error = "";
+        if (ascension < 0)
+        {
+            error = "ascension must be non-negative.";
+            return false;
+        }
+
+        var type = lobby.GetType();
+        var setAscension = type.GetMethod(
+            "SetAscension",
+            BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance,
+            [typeof(int)]);
+        if (setAscension != null)
+        {
+            setAscension.Invoke(lobby, [ascension]);
+            return true;
+        }
+
+        var property = type.GetProperty(
+            "Ascension",
+            BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
+        if (property?.CanWrite == true)
+        {
+            property.SetValue(lobby, ascension);
+            return true;
+        }
+
+        var field = type.GetField(
+            "Ascension",
+            BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
+        if (field != null)
+        {
+            field.SetValue(lobby, ascension);
+            return true;
+        }
+
+        error = "Ascension embark failed before starting the run: lobby does not expose a writable ascension control.";
+        return false;
     }
 
     private static Dictionary<string, object?>? TryHandleQueuedTimelineUnlock(NTimelineScreen timelineScreen)
