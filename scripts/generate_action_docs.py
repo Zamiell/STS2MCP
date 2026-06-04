@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import re
 import subprocess
 import sys
@@ -50,6 +51,13 @@ class StateTypeDoc:
 
 
 @dataclass
+class StateExampleDoc:
+    state_type: str
+    description: str
+    json_text: str
+
+
+@dataclass
 class SectionDoc:
     order: int
     title: str
@@ -58,6 +66,16 @@ class SectionDoc:
 
 def parse_string_args(text: str) -> list[str]:
     return re.findall(r'"((?:[^"\\]|\\.)*)"', text)
+
+
+def unescape_csharp_string(text: str) -> str:
+    return (
+        text.replace(r"\\", "\\")
+        .replace(r"\"", '"')
+        .replace(r"\n", "\n")
+        .replace(r"\r", "\r")
+        .replace(r"\t", "\t")
+    )
 
 
 def parse_bool_arg(text: str) -> bool | None:
@@ -128,11 +146,16 @@ def parse_actions(root: Path) -> list[ActionDoc]:
 def parse_api_metadata(
     root: Path,
 ) -> tuple[
-    list[EndpointDoc], list[QueryParameterDoc], list[StateTypeDoc], list[SectionDoc]
+    list[EndpointDoc],
+    list[QueryParameterDoc],
+    list[StateTypeDoc],
+    list[StateExampleDoc],
+    list[SectionDoc],
 ]:
     endpoints: list[EndpointDoc] = []
     query_parameters: list[QueryParameterDoc] = []
     state_types: list[StateTypeDoc] = []
+    state_examples: list[StateExampleDoc] = []
     sections: list[SectionDoc] = []
 
     for source_file in DOCUMENTATION_FILES:
@@ -166,6 +189,21 @@ def parse_api_metadata(
                 state_types.append(StateTypeDoc(*args))
                 continue
 
+            if stripped.startswith("[assembly: McpStateExample("):
+                args = parse_string_args(stripped)
+                if len(args) != 3:
+                    raise SystemExit(
+                        f"Malformed McpStateExample in {source_file}: {stripped}",
+                    )
+                state_examples.append(
+                    StateExampleDoc(
+                        args[0],
+                        args[1],
+                        unescape_csharp_string(args[2]),
+                    ),
+                )
+                continue
+
             if stripped.startswith("[assembly: McpDocSection("):
                 args = parse_string_args(stripped)
                 order = parse_int_arg(stripped)
@@ -179,6 +217,7 @@ def parse_api_metadata(
         endpoints,
         query_parameters,
         state_types,
+        state_examples,
         sorted(sections, key=lambda section: section.order),
     )
 
@@ -199,6 +238,7 @@ def render_metadata_sections(
     endpoints: list[EndpointDoc],
     query_parameters: list[QueryParameterDoc],
     state_types: list[StateTypeDoc],
+    state_examples: list[StateExampleDoc],
     sections: list[SectionDoc],
 ) -> list[str]:
     lines = [
@@ -274,6 +314,35 @@ def render_metadata_sections(
         )
     lines.append("")
 
+    if state_examples:
+        lines.extend(["### State Examples", ""])
+        lines.extend(
+            [
+                "These examples show representative JSON shapes. Fields may be omitted, null, or expanded depending on the current screen, character, and run state.",
+                "",
+            ],
+        )
+        for example in state_examples:
+            try:
+                parsed = json.loads(example.json_text)
+                json_text = json.dumps(parsed, indent=2)
+            except json.JSONDecodeError as exc:
+                raise SystemExit(
+                    f"Malformed JSON example for {example.state_type}: {exc}",
+                ) from exc
+            lines.extend(
+                [
+                    f"#### `{example.state_type}`",
+                    "",
+                    example.description,
+                    "",
+                    "```json",
+                    json_text,
+                    "```",
+                    "",
+                ],
+            )
+
     for section in sections:
         if section.title in {"Overview", "Common Game State", "Object Shapes"}:
             continue
@@ -324,9 +393,16 @@ def render_markdown(
     endpoints: list[EndpointDoc],
     query_parameters: list[QueryParameterDoc],
     state_types: list[StateTypeDoc],
+    state_examples: list[StateExampleDoc],
     sections: list[SectionDoc],
 ) -> str:
-    lines = render_metadata_sections(endpoints, query_parameters, state_types, sections)
+    lines = render_metadata_sections(
+        endpoints,
+        query_parameters,
+        state_types,
+        state_examples,
+        sections,
+    )
     lines.extend(render_actions(docs))
     return "\n".join(lines).rstrip() + "\n"
 
@@ -381,7 +457,13 @@ def main() -> None:
     root = Path(__file__).resolve().parents[1]
     output_path = root / "docs" / "actions.md"
     docs = parse_actions(root)
-    endpoints, query_parameters, state_types, sections = parse_api_metadata(root)
+    (
+        endpoints,
+        query_parameters,
+        state_types,
+        state_examples,
+        sections,
+    ) = parse_api_metadata(root)
     documented = {doc.action for doc in docs}
     missing = sorted(parse_switch_actions(root) - documented)
     if missing:
@@ -390,7 +472,14 @@ def main() -> None:
         )
 
     text = format_markdown(
-        render_markdown(docs, endpoints, query_parameters, state_types, sections),
+        render_markdown(
+            docs,
+            endpoints,
+            query_parameters,
+            state_types,
+            state_examples,
+            sections,
+        ),
     )
 
     if args.check:

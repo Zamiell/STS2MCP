@@ -137,6 +137,7 @@ public static partial class McpMod
 
         MaybeEnsureReplayFileForCurrentRun();
         MaybeFlushCompletedCombatReplay();
+        MaybeAppendReplayTraceForCurrentState();
         ProcessReplayPlayback();
     }
 

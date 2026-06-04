@@ -4,6 +4,7 @@ using System.IO;
 using System.Linq;
 using System.Text.Json;
 using Godot;
+using MegaCrit.Sts2.Core.GameActions;
 using MegaCrit.Sts2.Core.Nodes;
 using MegaCrit.Sts2.Core.Runs;
 
@@ -13,6 +14,7 @@ public static partial class McpMod
 {
     private static readonly object _replayPlaybackLock = new();
     private static ReplayPlaybackState? _activeReplayPlayback;
+    private static readonly HashSet<uint> _completedReplayActionIds = [];
     private static bool _suppressReplayRecording;
 
     [McpAction("start_replay", "Replay", "Start playing a newline-delimited JSON replay file.")]
@@ -49,6 +51,7 @@ public static partial class McpMod
 
         lock (_replayPlaybackLock)
         {
+            _completedReplayActionIds.Clear();
             _activeReplayPlayback = new ReplayPlaybackState(
                 replayPath.Path!,
                 commands.Commands!,
@@ -148,14 +151,50 @@ public static partial class McpMod
                 return;
             }
 
+            if (playback.AwaitingActionId.HasValue)
+            {
+                if (!HasReplayActionCompleted(playback.AwaitingActionId.Value))
+                {
+                    if (DateTimeOffset.UtcNow - playback.CommandStartedAt >= playback.CommandTimeout)
+                    {
+                        playback.Fail($"Timed out waiting for action {playback.AwaitingActionId.Value} to complete");
+                        GD.PrintErr($"[STS2 MCP] ReplayPlayback: {playback.Error}");
+                    }
+                    return;
+                }
+
+                _completedReplayActionIds.Remove(playback.AwaitingActionId.Value);
+                playback.CompleteAwaitingAction();
+            }
+
             if (playback.NextIndex >= playback.Commands.Count)
             {
+                if (TryGetIncompleteReplayReason(out var incompleteReason))
+                {
+                    playback.Fail(incompleteReason);
+                    GD.PrintErr($"[STS2 MCP] ReplayPlayback: {playback.Error}");
+                    return;
+                }
+
                 playback.Complete();
                 GD.Print($"[STS2 MCP] ReplayPlayback: completed {playback.Path}");
                 return;
             }
 
+            if (!playback.IsReadyForNextCommand)
+                return;
+
             var command = playback.Commands[playback.NextIndex];
+            if (ShouldSkipStaleCombatReplayCommand(playback, command))
+            {
+                playback.Advance(new Dictionary<string, object?>
+                {
+                    ["status"] = "ok",
+                    ["message"] = "Skipping stale combat command after combat ended"
+                }, TimeSpan.Zero);
+                return;
+            }
+
             var result = ExecuteReplayCommand(command);
             if (IsReplayCommandSuccess(result))
             {
@@ -165,12 +204,25 @@ public static partial class McpMod
                     return;
                 }
 
-                playback.Advance(result);
+                if (TryGetReplayActionId(result, out var actionId) && ShouldWaitForReplayAction(command))
+                    playback.BeginAwaitingAction(result, actionId);
+                else
+                    playback.Advance(result, GetReplayCommandSettleDelay(command));
                 return;
             }
 
             playback.LastResult = result;
             playback.LastError = ExtractReplayError(result);
+            if (ShouldSkipSatisfiedReplayProceed(playback, command))
+            {
+                playback.Advance(new Dictionary<string, object?>
+                {
+                    ["status"] = "ok",
+                    ["message"] = "Skipping proceed because the replay is already at the next map choice"
+                }, TimeSpan.Zero);
+                return;
+            }
+
             if (DateTimeOffset.UtcNow - playback.CommandStartedAt >= playback.CommandTimeout)
             {
                 playback.Fail($"Timed out waiting for command {playback.NextIndex}: {playback.LastError}");
@@ -182,6 +234,104 @@ public static partial class McpMod
             playback.Fail(ex.Message);
             GD.PrintErr($"[STS2 MCP] ReplayPlayback failed: {ex}");
         }
+    }
+
+    private static bool ShouldSkipStaleCombatReplayCommand(
+        ReplayPlaybackState playback,
+        Dictionary<string, JsonElement> command)
+    {
+        if (!IsCombatReplayCommand(command))
+            return false;
+
+        var state = BuildGameState();
+        var stateType = state.TryGetValue("state_type", out var stateTypeValue)
+            ? Convert.ToString(stateTypeValue)
+            : null;
+
+        if (string.Equals(stateType, "game_over", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(stateType, "victory", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        return playback.NextIndex > 0
+               && IsCombatReplayCommand(playback.Commands[playback.NextIndex - 1])
+               && IsPostCombatReplayState(stateType);
+    }
+
+    private static bool IsPostCombatReplayState(string? stateType)
+    {
+        return stateType is not null
+               && (string.Equals(stateType, "rewards", StringComparison.OrdinalIgnoreCase)
+                   || string.Equals(stateType, "card_reward", StringComparison.OrdinalIgnoreCase)
+                   || string.Equals(stateType, "map", StringComparison.OrdinalIgnoreCase)
+                   || string.Equals(stateType, "event", StringComparison.OrdinalIgnoreCase)
+                   || string.Equals(stateType, "shop", StringComparison.OrdinalIgnoreCase)
+                   || string.Equals(stateType, "rest_site", StringComparison.OrdinalIgnoreCase)
+                   || string.Equals(stateType, "treasure", StringComparison.OrdinalIgnoreCase)
+                   || string.Equals(stateType, "fake_merchant", StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static bool TryGetIncompleteReplayReason(out string reason)
+    {
+        reason = "";
+
+        var state = BuildGameState();
+        var stateType = state.TryGetValue("state_type", out var stateTypeValue)
+            ? Convert.ToString(stateTypeValue)
+            : null;
+
+        if (stateType is not null
+            && (string.Equals(stateType, "monster", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(stateType, "elite", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(stateType, "boss", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(stateType, "hand_select", StringComparison.OrdinalIgnoreCase)))
+        {
+            var floor = TryGetNestedStateValue(state, "run", "floor");
+            reason = $"Replay ended while still in {stateType} state";
+            if (floor != null)
+                reason += $" on floor {floor}";
+            return true;
+        }
+
+        return false;
+    }
+
+    private static object? TryGetNestedStateValue(
+        Dictionary<string, object?> state,
+        string objectKey,
+        string valueKey)
+    {
+        return state.TryGetValue(objectKey, out var nested)
+               && nested is Dictionary<string, object?> nestedDictionary
+               && nestedDictionary.TryGetValue(valueKey, out var value)
+            ? value
+            : null;
+    }
+
+    private static bool ShouldSkipSatisfiedReplayProceed(
+        ReplayPlaybackState playback,
+        Dictionary<string, JsonElement> command)
+    {
+        if (!ReplayCommandIsProceed(command)
+            || playback.NextIndex + 1 >= playback.Commands.Count
+            || !IsReplayCommandAction(playback.Commands[playback.NextIndex + 1], "choose_map_node"))
+        {
+            return false;
+        }
+
+        if (playback.NextIndex > 0
+            && IsReplayCommandAction(playback.Commands[playback.NextIndex - 1], "choose_map_node"))
+        {
+            return false;
+        }
+
+        var state = BuildGameState();
+        var stateType = state.TryGetValue("state_type", out var stateTypeValue)
+            ? Convert.ToString(stateTypeValue)
+            : null;
+
+        return string.Equals(stateType, "map", StringComparison.OrdinalIgnoreCase);
     }
 
     private static void ProcessPendingEventProceed(ReplayPlaybackState playback)
@@ -247,6 +397,60 @@ public static partial class McpMod
     {
         return command.TryGetValue("action", out var actionElement)
                && string.Equals(actionElement.GetString(), "proceed", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static TimeSpan GetReplayCommandSettleDelay(Dictionary<string, JsonElement> command)
+    {
+        if (!command.TryGetValue("action", out var actionElement))
+            return TimeSpan.Zero;
+
+        return actionElement.GetString() switch
+        {
+            "play_card" => TimeSpan.Zero,
+            "end_turn" => TimeSpan.Zero,
+            "use_potion" => TimeSpan.Zero,
+            _ => TimeSpan.Zero
+        };
+    }
+
+    private static bool ShouldWaitForReplayAction(Dictionary<string, JsonElement> command)
+    {
+        if (!command.TryGetValue("action", out var actionElement))
+            return false;
+
+        return actionElement.GetString() is "play_card" or "end_turn";
+    }
+
+    private static bool TryGetReplayActionId(Dictionary<string, object?> result, out uint actionId)
+    {
+        actionId = 0;
+        if (!result.TryGetValue("action_id", out var value) || value == null)
+            return false;
+
+        try
+        {
+            actionId = Convert.ToUInt32(value);
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static bool HasReplayActionCompleted(uint actionId)
+    {
+        lock (_replayPlaybackLock)
+            return _completedReplayActionIds.Contains(actionId);
+    }
+
+    private static void RememberCompletedReplayAction(GameAction action)
+    {
+        if (!action.Id.HasValue)
+            return;
+
+        lock (_replayPlaybackLock)
+            _completedReplayActionIds.Add(action.Id.Value);
     }
 
     private static bool TryGetCurrentEventProceedId(out string eventId)
@@ -574,6 +778,7 @@ public static partial class McpMod
         public TimeSpan CommandTimeout { get; }
         public DateTimeOffset StartedAt { get; }
         public DateTimeOffset CommandStartedAt { get; private set; }
+        public DateTimeOffset NextCommandReadyAt { get; private set; }
         public int NextIndex { get; private set; }
         public string Status { get; private set; } = "running";
         public string? LastError { get; set; }
@@ -585,13 +790,17 @@ public static partial class McpMod
         public string? AwaitingEventProceedEventId { get; private set; }
         public DateTimeOffset AwaitingEventProceedLastClickAt { get; set; }
         public Dictionary<string, object?>? AwaitingEventProceedResult { get; set; }
+        public uint? AwaitingActionId { get; private set; }
+        public Dictionary<string, object?>? AwaitingActionResult { get; private set; }
         public bool IsDone => Status is "completed" or "failed" or "canceled";
+        public bool IsReadyForNextCommand => DateTimeOffset.UtcNow >= NextCommandReadyAt;
 
-        public void Advance(Dictionary<string, object?> result)
+        public void Advance(Dictionary<string, object?> result, TimeSpan? settleDelay = null)
         {
             LastResult = result;
             LastError = null;
             NextIndex++;
+            NextCommandReadyAt = DateTimeOffset.UtcNow + (settleDelay ?? TimeSpan.Zero);
             ResetCommandTimer();
         }
 
@@ -608,6 +817,24 @@ public static partial class McpMod
             AwaitingEventProceedLastClickAt = DateTimeOffset.UtcNow;
             LastResult = result;
             LastError = null;
+        }
+
+        public void BeginAwaitingAction(Dictionary<string, object?> result, uint actionId)
+        {
+            AwaitingActionId = actionId;
+            AwaitingActionResult = result;
+            LastResult = result;
+            LastError = null;
+            ResetCommandTimer();
+        }
+
+        public void CompleteAwaitingAction()
+        {
+            var result = AwaitingActionResult
+                         ?? new Dictionary<string, object?> { ["status"] = "ok", ["message"] = "Action completed" };
+            AwaitingActionId = null;
+            AwaitingActionResult = null;
+            Advance(result, TimeSpan.Zero);
         }
 
         public void CompleteAwaitingEventProceed()

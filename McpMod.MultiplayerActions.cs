@@ -39,6 +39,7 @@ public static partial class McpMod
             "discard_potion" => ExecuteDiscardPotion(player, data),
             "choose_map_node" => ExecuteChooseMapNode(data),
             "choose_event_option" => ExecuteChooseEventOption(data),
+            "choose_event_option_by_title_key" => ExecuteChooseEventOptionByTitleKey(data),
             "advance_dialogue" => ExecuteAdvanceDialogue(),
             "choose_rest_option" => ExecuteChooseRestOption(data),
             "shop_purchase" => ExecuteShopPurchase(player, data),

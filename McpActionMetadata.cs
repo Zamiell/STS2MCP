@@ -110,6 +110,24 @@ public sealed class McpStateTypeAttribute : Attribute
 }
 
 [AttributeUsage(AttributeTargets.Assembly, AllowMultiple = true)]
+public sealed class McpStateExampleAttribute : Attribute
+{
+    public McpStateExampleAttribute(
+        string stateType,
+        string description,
+        string json)
+    {
+        StateType = stateType;
+        Description = description;
+        Json = json;
+    }
+
+    public string StateType { get; }
+    public string Description { get; }
+    public string Json { get; }
+}
+
+[AttributeUsage(AttributeTargets.Assembly, AllowMultiple = true)]
 public sealed class McpDocSectionAttribute : Attribute
 {
     public McpDocSectionAttribute(int order, string title, string body)

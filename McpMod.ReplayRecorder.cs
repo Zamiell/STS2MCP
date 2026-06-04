@@ -24,8 +24,12 @@ public static partial class McpMod
     private static readonly List<string> _pendingCombatReplayCommands = [];
     private static string? _activeReplayRunKey;
     private static string? _activeReplayPath;
+    private static string? _activeTracePath;
     private static DateTimeOffset _nextReplayFileEnsureAt = DateTimeOffset.MinValue;
+    private static DateTimeOffset _nextReplayTraceCheckAt = DateTimeOffset.MinValue;
     private static int _recordedObservedCommandCount;
+    private static int _traceSequence;
+    private static string? _lastTraceStateSignature;
     private static bool _wasCombatReplayInProgress;
 
     private static readonly JsonSerializerOptions _replayJsonOptions = new()
@@ -49,19 +53,37 @@ public static partial class McpMod
             if (IsCombatReplayCommand(command) && CombatManager.Instance?.IsInProgress == true)
                 return;
 
-            var line = JsonSerializer.Serialize(command, _replayJsonOptions);
+            var recordCommand = BuildReplayRecordedCommand(command, result);
+            var line = JsonSerializer.Serialize(recordCommand, _replayJsonOptions);
             var runInfo = TryGetReplayRunInfo(logMissing: true);
 
             lock (_replayRecorderLock)
             {
                 if (runInfo == null)
                 {
+                    if (_pendingCombatReplayCommands.Count > 0)
+                    {
+                        _pendingCombatReplayCommands.Add(line);
+                        return;
+                    }
+
                     BufferPendingReplayCommand(line);
                     return;
                 }
 
                 EnsureReplayFileForRun(runInfo);
-                File.AppendAllText(runInfo.Path, line + System.Environment.NewLine);
+                if (_pendingCombatReplayCommands.Count > 0)
+                {
+                    foreach (var pendingCombatLine in _pendingCombatReplayCommands)
+                    {
+                        File.AppendAllText(runInfo.Path, pendingCombatLine + System.Environment.NewLine);
+                        AppendTraceSnapshot(runInfo, "after_replay_command", DeserializeReplayLine(pendingCombatLine));
+                    }
+                    _pendingCombatReplayCommands.Clear();
+                }
+
+                if (AppendReplayCommandLine(runInfo.Path, line, recordCommand))
+                    AppendTraceSnapshot(runInfo, "after_replay_command", recordCommand);
             }
         }
         catch (Exception ex)
@@ -70,6 +92,54 @@ public static partial class McpMod
         }
     }
 
+    private static Dictionary<string, JsonElement> BuildReplayRecordedCommand(
+        Dictionary<string, JsonElement> command,
+        Dictionary<string, object?> result)
+    {
+        if (IsReplayCommandAction(command, "choose_rest_option")
+            && result.TryGetValue("option_id", out var optionId)
+            && !string.IsNullOrWhiteSpace(Convert.ToString(optionId, CultureInfo.InvariantCulture)))
+        {
+            var stable = new Dictionary<string, object?>
+            {
+                ["action"] = "choose_rest_option",
+                ["option_id"] = Convert.ToString(optionId, CultureInfo.InvariantCulture)
+            };
+            return JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(
+                JsonSerializer.Serialize(stable, _replayJsonOptions))!;
+        }
+
+        if (!IsReplayCommandAction(command, "choose_map_node"))
+            return command;
+
+        if (!result.TryGetValue("col", out var col)
+            || !result.TryGetValue("row", out var row))
+        {
+            return command;
+        }
+
+        var enriched = new Dictionary<string, object?>();
+        foreach (var (key, value) in command)
+            enriched[key] = JsonElementToObject(value);
+
+        enriched["col"] = Convert.ToInt32(col, CultureInfo.InvariantCulture);
+        enriched["row"] = Convert.ToInt32(row, CultureInfo.InvariantCulture);
+        return JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(
+            JsonSerializer.Serialize(enriched, _replayJsonOptions))!;
+    }
+
+    private static object? JsonElementToObject(JsonElement element) =>
+        element.ValueKind switch
+        {
+            JsonValueKind.String => element.GetString(),
+            JsonValueKind.Number when element.TryGetInt32(out var intValue) => intValue,
+            JsonValueKind.Number when element.TryGetDouble(out var doubleValue) => doubleValue,
+            JsonValueKind.True => true,
+            JsonValueKind.False => false,
+            JsonValueKind.Null => null,
+            _ => JsonSerializer.Deserialize<object>(element.GetRawText())
+        };
+
     private static void MaybeFlushCompletedCombatReplay()
     {
         var isCombatInProgress = CombatManager.Instance?.IsInProgress == true;
@@ -77,7 +147,10 @@ public static partial class McpMod
         if (!_wasCombatReplayInProgress && isCombatInProgress)
         {
             lock (_replayRecorderLock)
-                _pendingCombatReplayCommands.Clear();
+            {
+                if (_pendingCombatReplayCommands.Count == 0)
+                    _pendingCombatReplayCommands.Clear();
+            }
         }
 
         if (_wasCombatReplayInProgress && !isCombatInProgress)
@@ -96,12 +169,21 @@ public static partial class McpMod
                     return;
 
                 var runInfo = TryGetReplayRunInfo(logMissing: true);
-                if (runInfo == null)
+                var path = runInfo?.Path ?? _activeReplayPath;
+                if (string.IsNullOrWhiteSpace(path))
                     return;
 
-                EnsureReplayFileForRun(runInfo);
+                if (runInfo != null)
+                    EnsureReplayFileForRun(runInfo);
+                else
+                    Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+
                 foreach (var line in _pendingCombatReplayCommands)
-                    File.AppendAllText(runInfo.Path, line + System.Environment.NewLine);
+                {
+                    File.AppendAllText(path, line + System.Environment.NewLine);
+                    if (runInfo != null)
+                        AppendTraceSnapshot(runInfo, "after_combat_replay_command", DeserializeReplayLine(line));
+                }
 
                 _pendingCombatReplayCommands.Clear();
             }
@@ -151,7 +233,8 @@ public static partial class McpMod
                 }
 
                 EnsureReplayFileForRun(runInfo);
-                AppendReplayLineIfLastDifferent(runInfo.Path, line);
+                if (AppendReplayLineIfLastDifferent(runInfo.Path, line))
+                    AppendTraceSnapshot(runInfo, "after_observed_replay_command", command);
             }
         }
         catch (Exception ex)
@@ -173,6 +256,10 @@ public static partial class McpMod
             "discard_potion" => true,
             "combat_select_card" => true,
             "combat_confirm_selection" => true,
+            "select_card" => true,
+            "select_deck_card" => true,
+            "confirm_selection" => true,
+            "cancel_selection" => true,
             _ => false
         };
     }
@@ -188,6 +275,35 @@ public static partial class McpMod
 
         _nextReplayFileEnsureAt = now.AddSeconds(1);
         EnsureReplayFileForCurrentRun();
+    }
+
+    private static void MaybeAppendReplayTraceForCurrentState()
+    {
+        if (_suppressReplayRecording)
+            return;
+
+        var now = DateTimeOffset.UtcNow;
+        if (now < _nextReplayTraceCheckAt)
+            return;
+
+        _nextReplayTraceCheckAt = now.AddMilliseconds(250);
+
+        try
+        {
+            var runInfo = TryGetReplayRunInfo(logMissing: false);
+            if (runInfo == null)
+                return;
+
+            lock (_replayRecorderLock)
+            {
+                EnsureReplayFileForRun(runInfo);
+                AppendTraceSnapshotIfStateChanged(runInfo, "state_changed");
+            }
+        }
+        catch (Exception ex)
+        {
+            GD.PrintErr($"[STS2 MCP] Failed to append replay trace state: {ex.Message}");
+        }
     }
 
     private static void EnsureReplayFileForCurrentRun()
@@ -210,12 +326,16 @@ public static partial class McpMod
     private static void EnsureReplayFileForRun(ReplayRunInfo runInfo)
     {
         Directory.CreateDirectory(Path.GetDirectoryName(runInfo.Path)!);
+        Directory.CreateDirectory(Path.GetDirectoryName(runInfo.TracePath)!);
 
         if (_activeReplayRunKey != runInfo.RunKey)
         {
             _activeReplayRunKey = runInfo.RunKey;
             _activeReplayPath = runInfo.Path;
+            _activeTracePath = runInfo.TracePath;
             _recordedObservedCommandCount = -1;
+            _traceSequence = CountExistingTraceEntries(runInfo.TracePath);
+            _lastTraceStateSignature = null;
 
             if (!File.Exists(runInfo.Path))
             {
@@ -223,8 +343,17 @@ public static partial class McpMod
                 GD.Print($"[STS2 MCP] ReplayRecorder: created {runInfo.Path}");
             }
 
+            if (!File.Exists(runInfo.TracePath))
+            {
+                File.WriteAllText(runInfo.TracePath, "");
+                GD.Print($"[STS2 MCP] ReplayRecorder: created {runInfo.TracePath}");
+            }
+
             foreach (var pendingLine in _pendingReplayCommands)
+            {
                 File.AppendAllText(runInfo.Path, pendingLine + System.Environment.NewLine);
+                AppendTraceSnapshot(runInfo, "after_pending_replay_command", DeserializeReplayLine(pendingLine));
+            }
             _pendingReplayCommands.Clear();
         }
 
@@ -234,18 +363,114 @@ public static partial class McpMod
             GD.Print($"[STS2 MCP] ReplayRecorder: recreated {runInfo.Path}");
         }
 
-        AppendObservedCommands(runInfo);
+        if (!File.Exists(runInfo.TracePath))
+        {
+            File.WriteAllText(runInfo.TracePath, "");
+            GD.Print($"[STS2 MCP] ReplayRecorder: recreated {runInfo.TracePath}");
+        }
+
+        if (_pendingCombatReplayCommands.Count == 0)
+            AppendObservedCommands(runInfo);
     }
 
     private static void AppendObservedCommands(ReplayRunInfo runInfo)
     {
-        var observedLines = BuildObservedCommandLines(runInfo).ToList();
+        var observedLines = FilterObservedLinesForExistingNeowSelection(
+            runInfo.Path,
+            BuildObservedCommandLines(runInfo).ToList());
         _recordedObservedCommandCount = CountExistingObservedSubsequence(runInfo.Path, observedLines);
 
         for (var i = _recordedObservedCommandCount; i < observedLines.Count; i++)
             File.AppendAllText(runInfo.Path, observedLines[i] + System.Environment.NewLine);
 
         _recordedObservedCommandCount = observedLines.Count;
+    }
+
+    private static List<string> FilterObservedLinesForExistingNeowSelection(string path, List<string> observedLines)
+    {
+        if (!File.Exists(path))
+            return observedLines;
+
+        var existingLines = File.ReadAllLines(path).ToList();
+        if (!HasExplicitNeowSelection(existingLines))
+            return observedLines;
+
+        var neowChoiceIndex = FindFirstActionIndex(observedLines, "choose_event_option");
+        if (neowChoiceIndex < 0)
+            return observedLines;
+
+        var neowProceedIndex = FindFirstActionIndex(observedLines, "proceed", neowChoiceIndex + 1);
+        if (neowProceedIndex < 0)
+            return observedLines;
+
+        var filtered = new List<string>(observedLines.Count);
+        for (var i = 0; i < observedLines.Count; i++)
+        {
+            if (i > neowChoiceIndex
+                && i < neowProceedIndex
+                && IsSelectionReplayLine(observedLines[i]))
+            {
+                continue;
+            }
+
+            filtered.Add(observedLines[i]);
+        }
+
+        return filtered;
+    }
+
+    private static bool HasExplicitNeowSelection(List<string> existingLines)
+    {
+        var neowChoiceIndex = FindFirstActionIndex(existingLines, "choose_event_option");
+        if (neowChoiceIndex < 0)
+            return false;
+
+        var neowProceedIndex = FindFirstActionIndex(existingLines, "proceed", neowChoiceIndex + 1);
+        if (neowProceedIndex < 0)
+            neowProceedIndex = existingLines.Count;
+
+        for (var i = neowChoiceIndex + 1; i < neowProceedIndex; i++)
+        {
+            if (IsSelectionReplayLine(existingLines[i]))
+                return true;
+        }
+
+        return false;
+    }
+
+    private static int FindFirstActionIndex(List<string> lines, string action, int startIndex = 0)
+    {
+        for (var i = Math.Max(0, startIndex); i < lines.Count; i++)
+        {
+            if (ReplayLineHasAction(lines[i], action))
+                return i;
+        }
+
+        return -1;
+    }
+
+    private static bool IsSelectionReplayLine(string line) =>
+        ReplayLineHasAction(line, "select_card")
+        || ReplayLineHasAction(line, "select_deck_card")
+        || ReplayLineHasAction(line, "select_card_reward_by_id")
+        || ReplayLineHasAction(line, "confirm_selection")
+        || ReplayLineHasAction(line, "cancel_selection")
+        || ReplayLineHasAction(line, "select_bundle")
+        || ReplayLineHasAction(line, "confirm_bundle_selection")
+        || ReplayLineHasAction(line, "cancel_bundle_selection");
+
+    private static bool ReplayLineHasAction(string line, string action)
+    {
+        try
+        {
+            using var document = JsonDocument.Parse(line);
+            return document.RootElement.TryGetProperty("action", out var actionElement)
+                   && string.Equals(actionElement.GetString(), action, StringComparison.OrdinalIgnoreCase);
+        }
+        catch
+        {
+            return false;
+        }
     }
 
     private static int CountExistingObservedSubsequence(string path, List<string> observedLines)
@@ -259,23 +484,130 @@ public static partial class McpMod
             if (count >= observedLines.Count)
                 break;
 
-            if (line == observedLines[count])
+            if (ReplayLinesMatch(line, observedLines[count]))
                 count++;
         }
         return count;
     }
 
-    private static void AppendReplayLineIfLastDifferent(string path, string line)
+    private static bool ReplayLinesMatch(string left, string right) =>
+        NormalizeReplayLineForComparison(left) == NormalizeReplayLineForComparison(right);
+
+    private static string NormalizeReplayLineForComparison(string line) =>
+        line.Replace("\"CARD.", "\"", StringComparison.OrdinalIgnoreCase)
+            .Replace("\"POTION.", "\"", StringComparison.OrdinalIgnoreCase)
+            .Replace("\"RELIC.", "\"", StringComparison.OrdinalIgnoreCase)
+            .Replace("\"CHARACTER.", "\"", StringComparison.OrdinalIgnoreCase);
+
+    private static bool AppendReplayLineIfLastDifferent(string path, string line)
     {
         if (File.Exists(path))
         {
             var lastLine = File.ReadLines(path).LastOrDefault();
             if (lastLine == line)
-                return;
+                return false;
         }
 
         File.AppendAllText(path, line + System.Environment.NewLine);
+        return true;
     }
+
+    private static bool AppendReplayCommandLine(
+        string path,
+        string line,
+        Dictionary<string, JsonElement> command)
+    {
+        if (IsReplayCommandAction(command, "choose_map_node")
+            && File.Exists(path)
+            && ReplayLinesMatch(File.ReadLines(path).LastOrDefault() ?? "", line))
+        {
+            return false;
+        }
+
+        File.AppendAllText(path, line + System.Environment.NewLine);
+        return true;
+    }
+
+    private static void AppendTraceSnapshotIfStateChanged(ReplayRunInfo runInfo, string reason)
+    {
+        var state = BuildGameState();
+        var signature = BuildTraceStateSignature(state);
+        if (signature == _lastTraceStateSignature)
+            return;
+
+        _lastTraceStateSignature = signature;
+        AppendTraceSnapshot(runInfo, reason, null, state);
+    }
+
+    private static void AppendTraceSnapshot(
+        ReplayRunInfo runInfo,
+        string reason,
+        object? command,
+        Dictionary<string, object?>? state = null)
+    {
+        try
+        {
+            state ??= BuildGameState();
+            _lastTraceStateSignature = BuildTraceStateSignature(state);
+
+            var entry = new Dictionary<string, object?>
+            {
+                ["step"] = _traceSequence++,
+                ["timestamp"] = DateTimeOffset.UtcNow.ToString("O", CultureInfo.InvariantCulture),
+                ["reason"] = reason,
+                ["replay_command_count"] = CountReplayCommands(runInfo.Path),
+                ["command"] = command,
+                ["state_type"] = state.TryGetValue("state_type", out var stateType) ? stateType : null,
+                ["floor"] = TryGetNestedTraceValue(state, "run", "floor"),
+                ["state"] = state
+            };
+
+            File.AppendAllText(
+                runInfo.TracePath,
+                JsonSerializer.Serialize(entry, _replayJsonOptions) + System.Environment.NewLine);
+        }
+        catch (Exception ex)
+        {
+            GD.PrintErr($"[STS2 MCP] Failed to append replay trace snapshot: {ex.Message}");
+        }
+    }
+
+    private static string BuildTraceStateSignature(Dictionary<string, object?> state) =>
+        JsonSerializer.Serialize(state, _replayJsonOptions);
+
+    private static object? TryGetNestedTraceValue(
+        Dictionary<string, object?> state,
+        string objectKey,
+        string valueKey)
+    {
+        return state.TryGetValue(objectKey, out var nested)
+               && nested is Dictionary<string, object?> nestedDictionary
+               && nestedDictionary.TryGetValue(valueKey, out var value)
+            ? value
+            : null;
+    }
+
+    private static int CountReplayCommands(string path) =>
+        File.Exists(path) ? File.ReadLines(path).Count(line => !string.IsNullOrWhiteSpace(line)) : 0;
+
+    private static int CountExistingTraceEntries(string path) =>
+        File.Exists(path) ? File.ReadLines(path).Count(line => !string.IsNullOrWhiteSpace(line)) : 0;
+
+    private static Dictionary<string, JsonElement>? DeserializeReplayLine(string line)
+    {
+        try
+        {
+            return JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(line);
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static bool IsReplayCommandAction(Dictionary<string, JsonElement> command, string action) =>
+        command.TryGetValue("action", out var actionElement)
+        && string.Equals(actionElement.GetString(), action, StringComparison.OrdinalIgnoreCase);
 
     private static IEnumerable<string> BuildObservedCommandLines(ReplayRunInfo runInfo)
     {
@@ -308,10 +640,12 @@ public static partial class McpMod
                 ["index"] = neowChoice.Value
             });
 
-            foreach (var command in BuildObservedNeowSelectionCommands(root, firstActHistory!.Value))
+            var neowSelectionCommands = BuildObservedNeowSelectionCommands(root, firstActHistory!.Value).ToList();
+            foreach (var command in neowSelectionCommands)
                 yield return command;
 
-            yield return SerializeReplayCommand(new Dictionary<string, object?> { ["action"] = "proceed" });
+            if (neowSelectionCommands.Count > 0)
+                yield return SerializeReplayCommand(new Dictionary<string, object?> { ["action"] = "proceed" });
         }
 
         foreach (var command in BuildObservedMapAndRoomCommands(root, firstActHistory))
@@ -384,7 +718,8 @@ public static partial class McpMod
             }
         }
 
-        if (stats.TryGetProperty("cards_gained", out var cardsGained)
+        if (IsChosenNeowReward(stats, "SCROLL_BOXES")
+            && stats.TryGetProperty("cards_gained", out var cardsGained)
             && cardsGained.ValueKind == JsonValueKind.Array)
         {
             foreach (var card in cardsGained.EnumerateArray())
@@ -400,8 +735,154 @@ public static partial class McpMod
             }
         }
 
+        if (IsChosenNeowReward(stats, "NEOWS_BONES"))
+        {
+            var neowsBonesRelics = GetNeowsBonesRewardRelicIds(stats);
+            foreach (var relicId in neowsBonesRelics)
+            {
+                yield return SerializeReplayCommand(new Dictionary<string, object?>
+                {
+                    ["action"] = "claim_reward_by_match",
+                    ["type"] = "relic",
+                    ["relic_id"] = relicId
+                });
+            }
+
+            foreach (var cardId in GetNeowChosenCardIds(stats))
+            {
+                yield return SerializeReplayCommand(new Dictionary<string, object?>
+                {
+                    ["action"] = "select_card",
+                    ["card_id"] = cardId
+                });
+            }
+        }
+
         if (emittedDeckSelection)
             yield return SerializeReplayCommand(new Dictionary<string, object?> { ["action"] = "confirm_selection" });
+    }
+
+    private static List<string> GetNeowsBonesRewardRelicIds(JsonElement stats)
+    {
+        var pickedRelics = GetPickedRelicIds(stats)
+            .Where(relicId => !string.Equals(relicId, "NEOWS_BONES", StringComparison.OrdinalIgnoreCase))
+            .ToList();
+        if (pickedRelics.Count <= 2)
+            return pickedRelics;
+
+        return [pickedRelics[0], pickedRelics[^1]];
+    }
+
+    private static List<string> GetPickedRelicIds(JsonElement stats)
+    {
+        var relicIds = new List<string>();
+        if (!stats.TryGetProperty("relic_choices", out var relicChoices)
+            || relicChoices.ValueKind != JsonValueKind.Array)
+        {
+            return relicIds;
+        }
+
+        foreach (var relicChoice in relicChoices.EnumerateArray())
+        {
+            if (!relicChoice.TryGetProperty("was_picked", out var wasPicked)
+                || wasPicked.ValueKind != JsonValueKind.True
+                || !relicChoice.TryGetProperty("choice", out var choice))
+            {
+                continue;
+            }
+
+            var relicId = StripModelPrefix(choice.GetString(), "RELIC.");
+            if (!string.IsNullOrWhiteSpace(relicId))
+                relicIds.Add(relicId);
+        }
+
+        return relicIds;
+    }
+
+    private static List<string> GetNeowChosenCardIds(JsonElement stats)
+    {
+        var cardIds = new List<string>();
+        if (!stats.TryGetProperty("cards_gained", out var cardsGained)
+            || cardsGained.ValueKind != JsonValueKind.Array)
+        {
+            return cardIds;
+        }
+
+        foreach (var card in cardsGained.EnumerateArray())
+        {
+            if (!card.TryGetProperty("id", out var cardIdElement))
+                continue;
+
+            var cardId = StripModelPrefix(cardIdElement.GetString(), "CARD.");
+            if (string.IsNullOrWhiteSpace(cardId)
+                || IsBasicStarterCardId(cardId)
+                || IsCurseCardId(cardId))
+            {
+                continue;
+            }
+
+            cardIds.Add(cardId);
+        }
+
+        return cardIds;
+    }
+
+    private static bool IsBasicStarterCardId(string cardId) =>
+        cardId.Contains("STRIKE", StringComparison.OrdinalIgnoreCase)
+        || cardId.Contains("DEFEND", StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsCurseCardId(string cardId) =>
+        cardId is "ASCENDERS_BANE" or "CLUMSY" or "CURSE_OF_THE_BELL" or "DECAY" or "DOUBT" or "INJURY" or "NECRONOMICURSE" or "NORMALITY" or "PAIN" or "PARASITE" or "REGRET" or "SHAME" or "WRITHE";
+
+    private static string StripModelPrefix(string? value, string prefix)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return "";
+
+        return value.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)
+            ? value[prefix.Length..]
+            : value;
+    }
+
+    private static bool IsChosenNeowReward(JsonElement stats, string rewardId)
+    {
+        if (stats.TryGetProperty("ancient_choice", out var choices)
+            && choices.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var choice in choices.EnumerateArray())
+            {
+                if (!choice.TryGetProperty("was_chosen", out var wasChosen)
+                    || wasChosen.ValueKind != JsonValueKind.True)
+                {
+                    continue;
+                }
+
+                if (choice.TryGetProperty("TextKey", out var textKey)
+                    && string.Equals(textKey.GetString(), rewardId, StringComparison.OrdinalIgnoreCase))
+                {
+                    return true;
+                }
+            }
+        }
+
+        if (stats.TryGetProperty("relic_choices", out var relicChoices)
+            && relicChoices.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var relicChoice in relicChoices.EnumerateArray())
+            {
+                if (!relicChoice.TryGetProperty("was_picked", out var wasPicked)
+                    || wasPicked.ValueKind != JsonValueKind.True
+                    || !relicChoice.TryGetProperty("choice", out var choice))
+                {
+                    continue;
+                }
+
+                if (string.Equals(choice.GetString(), $"RELIC.{rewardId}", StringComparison.OrdinalIgnoreCase))
+                    return true;
+            }
+        }
+
+        return false;
     }
 
     private static List<ReplayCardSnapshot> BuildInitialNeowDeck(JsonElement root)
@@ -535,12 +1016,14 @@ public static partial class McpMod
 
         for (var i = 1; i < visited.GetArrayLength(); i++)
         {
-            var mapChoice = TryGetMapChoiceIndex(root, visited[i - 1], visited[i]);
-            if (mapChoice.HasValue)
+            var mapChoice = TryGetMapChoice(root, visited[i - 1], visited[i]);
+            if (mapChoice != null)
                 yield return SerializeReplayCommand(new Dictionary<string, object?>
                 {
                     ["action"] = "choose_map_node",
-                    ["index"] = mapChoice.Value
+                    ["index"] = mapChoice.Value.Index,
+                    ["col"] = mapChoice.Value.Col,
+                    ["row"] = mapChoice.Value.Row
                 });
 
             if (firstActHistory.HasValue && i < firstActHistory.Value.GetArrayLength())
@@ -558,7 +1041,18 @@ public static partial class McpMod
             yield break;
         }
 
-        if (stats.TryGetProperty("gold_gained", out var goldGained)
+        var isTreasure = MapPointHasRoomType(mapPointHistory, "treasure");
+        if (isTreasure)
+        {
+            foreach (var command in BuildObservedTreasureCommands(stats))
+                yield return command;
+        }
+
+        foreach (var command in BuildObservedRestSiteCommands(stats))
+            yield return command;
+
+        if (!isTreasure
+            && stats.TryGetProperty("gold_gained", out var goldGained)
             && goldGained.TryGetInt32(out var gold)
             && gold > 0)
         {
@@ -591,6 +1085,54 @@ public static partial class McpMod
             }
         }
 
+        if (!isTreasure
+            && stats.TryGetProperty("relic_choices", out var relicChoices)
+            && relicChoices.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var relicChoice in relicChoices.EnumerateArray())
+            {
+                if (!relicChoice.TryGetProperty("was_picked", out var wasPicked)
+                    || wasPicked.ValueKind != JsonValueKind.True
+                    || !relicChoice.TryGetProperty("choice", out var choice))
+                {
+                    continue;
+                }
+
+                yield return SerializeReplayCommand(new Dictionary<string, object?>
+                {
+                    ["action"] = "claim_reward_by_match",
+                    ["type"] = "relic",
+                    ["relic_id"] = StripModelPrefix(choice.GetString(), "RELIC.")
+                });
+            }
+        }
+
+        if (stats.TryGetProperty("event_choices", out var eventChoices)
+            && eventChoices.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var eventChoice in eventChoices.EnumerateArray())
+            {
+                if (!eventChoice.TryGetProperty("title", out var title)
+                    || !title.TryGetProperty("key", out var keyElement))
+                {
+                    continue;
+                }
+
+                var titleKey = keyElement.GetString();
+                if (string.IsNullOrWhiteSpace(titleKey))
+                    continue;
+
+                yield return SerializeReplayCommand(new Dictionary<string, object?>
+                {
+                    ["action"] = "choose_event_option_by_title_key",
+                    ["title_key"] = titleKey
+                });
+            }
+        }
+
+        foreach (var command in BuildObservedShopCardRemovalCommands(stats))
+            yield return command;
+
         if (stats.TryGetProperty("card_choices", out var cardChoices)
             && cardChoices.ValueKind == JsonValueKind.Array)
         {
@@ -618,6 +1160,160 @@ public static partial class McpMod
         }
 
         yield return SerializeReplayCommand(new Dictionary<string, object?> { ["action"] = "proceed" });
+    }
+
+    private static IEnumerable<string> BuildObservedTreasureCommands(JsonElement stats)
+    {
+        foreach (var _ in GetPickedRelicIds(stats))
+        {
+            yield return SerializeReplayCommand(new Dictionary<string, object?>
+            {
+                ["action"] = "claim_treasure_relic"
+            });
+        }
+    }
+
+    private static bool MapPointHasRoomType(JsonElement mapPointHistory, string roomType)
+    {
+        if (!mapPointHistory.TryGetProperty("rooms", out var rooms)
+            || rooms.ValueKind != JsonValueKind.Array)
+        {
+            return false;
+        }
+
+        foreach (var room in rooms.EnumerateArray())
+        {
+            if (room.TryGetProperty("room_type", out var roomTypeElement)
+                && string.Equals(roomTypeElement.GetString(), roomType, StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static IEnumerable<string> BuildObservedRestSiteCommands(JsonElement stats)
+    {
+        if (!stats.TryGetProperty("rest_site_choices", out var restChoices)
+            || restChoices.ValueKind != JsonValueKind.Array
+            || restChoices.GetArrayLength() == 0)
+        {
+            yield break;
+        }
+
+        foreach (var restChoice in restChoices.EnumerateArray())
+        {
+            var optionId = restChoice.GetString();
+            if (string.IsNullOrWhiteSpace(optionId))
+                continue;
+
+            yield return SerializeReplayCommand(new Dictionary<string, object?>
+            {
+                ["action"] = "choose_rest_option",
+                ["option_id"] = optionId
+            });
+
+            if (string.Equals(optionId, "SMITH", StringComparison.OrdinalIgnoreCase)
+                && stats.TryGetProperty("upgraded_cards", out var upgradedCards)
+                && upgradedCards.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var upgradedCard in upgradedCards.EnumerateArray())
+                {
+                    var cardId = StripModelPrefix(upgradedCard.GetString(), "CARD.");
+                    if (string.IsNullOrWhiteSpace(cardId))
+                        continue;
+
+                    yield return SerializeReplayCommand(new Dictionary<string, object?>
+                    {
+                        ["action"] = "select_deck_card",
+                        ["card_id"] = cardId
+                    });
+                    yield return SerializeReplayCommand(new Dictionary<string, object?>
+                    {
+                        ["action"] = "confirm_selection"
+                    });
+                }
+            }
+        }
+    }
+
+    private static IEnumerable<string> BuildObservedShopCardRemovalCommands(JsonElement stats)
+    {
+        if (!stats.TryGetProperty("cards_removed", out var cardsRemoved)
+            || cardsRemoved.ValueKind != JsonValueKind.Array
+            || cardsRemoved.GetArrayLength() == 0
+            || !stats.TryGetProperty("gold_spent", out var goldSpent)
+            || !goldSpent.TryGetInt32(out var spent)
+            || spent <= 0)
+        {
+            yield break;
+        }
+
+        var shopRemovalIndex = TryGetShopCardRemovalIndex(stats);
+        if (shopRemovalIndex == null)
+            yield break;
+
+        foreach (var removedCard in cardsRemoved.EnumerateArray())
+        {
+            if (!removedCard.TryGetProperty("id", out var cardIdElement))
+                continue;
+
+            var cardId = StripModelPrefix(cardIdElement.GetString(), "CARD.");
+            if (string.IsNullOrWhiteSpace(cardId))
+                continue;
+
+            yield return SerializeReplayCommand(new Dictionary<string, object?>
+            {
+                ["action"] = "shop_purchase",
+                ["index"] = shopRemovalIndex.Value
+            });
+            yield return SerializeReplayCommand(new Dictionary<string, object?>
+            {
+                ["action"] = "select_deck_card",
+                ["card_id"] = cardId
+            });
+            yield return SerializeReplayCommand(new Dictionary<string, object?>
+            {
+                ["action"] = "confirm_selection"
+            });
+        }
+    }
+
+    private static int? TryGetShopCardRemovalIndex(JsonElement stats)
+    {
+        if (!stats.TryGetProperty("card_choices", out var cardChoices)
+            || cardChoices.ValueKind != JsonValueKind.Array
+            || !stats.TryGetProperty("relic_choices", out var relicChoices)
+            || relicChoices.ValueKind != JsonValueKind.Array
+            || !stats.TryGetProperty("potion_choices", out var potionChoices)
+            || potionChoices.ValueKind != JsonValueKind.Array)
+        {
+            return null;
+        }
+
+        if (HasPickedChoice(cardChoices, "was_picked")
+            || HasPickedChoice(relicChoices, "was_picked")
+            || HasPickedChoice(potionChoices, "was_picked"))
+        {
+            return null;
+        }
+
+        return cardChoices.GetArrayLength() + relicChoices.GetArrayLength() + potionChoices.GetArrayLength();
+    }
+
+    private static bool HasPickedChoice(JsonElement choices, string propertyName)
+    {
+        foreach (var choice in choices.EnumerateArray())
+        {
+            if (choice.TryGetProperty(propertyName, out var wasPicked)
+                && wasPicked.ValueKind == JsonValueKind.True)
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static JsonElement? TryGetFirstActHistory(JsonElement root)
@@ -687,7 +1383,7 @@ public static partial class McpMod
         return true;
     }
 
-    private static int? TryGetMapChoiceIndex(JsonElement root, JsonElement previousCoord, JsonElement selectedCoord)
+    private static MapChoice? TryGetMapChoice(JsonElement root, JsonElement previousCoord, JsonElement selectedCoord)
     {
         if (!TryGetCoord(previousCoord, out var previousCol, out var previousRow)
             || !TryGetCoord(selectedCoord, out var selectedCol, out var selectedRow))
@@ -730,11 +1426,45 @@ public static partial class McpMod
                 && col == selectedCol
                 && row == selectedRow)
             {
-                return i;
+                return new MapChoice(i, selectedCol, selectedRow);
+            }
+        }
+
+        var wingedOptions = GetSavedMapPointsInRow(savedMap, selectedRow)
+            .OrderBy(point =>
+            {
+                TryGetCoord(point.GetProperty("coord"), out var col, out _);
+                return col;
+            })
+            .ToList();
+        for (var i = 0; i < wingedOptions.Count; i++)
+        {
+            if (TryGetCoord(wingedOptions[i].GetProperty("coord"), out var col, out var row)
+                && col == selectedCol
+                && row == selectedRow)
+            {
+                return new MapChoice(i, selectedCol, selectedRow);
             }
         }
 
         return null;
+    }
+
+    private static IEnumerable<JsonElement> GetSavedMapPointsInRow(JsonElement savedMap, int row)
+    {
+        if (!savedMap.TryGetProperty("points", out var points) || points.ValueKind != JsonValueKind.Array)
+            yield break;
+
+        foreach (var point in points.EnumerateArray())
+        {
+            if (point.ValueKind == JsonValueKind.Object
+                && point.TryGetProperty("coord", out var coord)
+                && TryGetCoord(coord, out _, out var candidateRow)
+                && candidateRow == row)
+            {
+                yield return point;
+            }
+        }
     }
 
     private static bool TryGetSavedMapPoint(
@@ -774,6 +1504,8 @@ public static partial class McpMod
                && rowElement.TryGetInt32(out row);
     }
 
+    private readonly record struct MapChoice(int Index, int Col, int Row);
+
     private static string SerializeReplayCommand(Dictionary<string, object?> command) =>
         JsonSerializer.Serialize(command, _replayJsonOptions);
 
@@ -788,12 +1520,24 @@ public static partial class McpMod
         if (string.IsNullOrWhiteSpace(action))
             return false;
 
-        if (action == "menu_select"
-            && command.TryGetValue("option", out var optionElement)
-            && string.Equals(optionElement.GetString(), "continue", StringComparison.OrdinalIgnoreCase))
+        if (action == "menu_select")
         {
-            return false;
+            if (!command.TryGetValue("option", out var optionElement))
+                return false;
+
+            var option = optionElement.GetString();
+            if (!IsReplayStartMenuOption(option))
+                return false;
+
+            if (string.Equals(option, "confirm", StringComparison.OrdinalIgnoreCase)
+                && !command.ContainsKey("seed"))
+            {
+                return false;
+            }
         }
+
+        if (action is "return_to_main_menu" or "start_replay" or "get_replay_status" or "cancel_replay")
+            return false;
 
         if (result.ContainsKey("error"))
             return false;
@@ -803,6 +1547,17 @@ public static partial class McpMod
             return false;
 
         return true;
+    }
+
+    private static bool IsReplayStartMenuOption(string? option)
+    {
+        if (string.IsNullOrWhiteSpace(option))
+            return false;
+
+        return string.Equals(option, "singleplayer", StringComparison.OrdinalIgnoreCase)
+               || string.Equals(option, "standard", StringComparison.OrdinalIgnoreCase)
+               || string.Equals(option, "confirm", StringComparison.OrdinalIgnoreCase)
+               || option.StartsWith("CHARACTER.", StringComparison.OrdinalIgnoreCase);
     }
 
     private static void BufferPendingReplayCommand(string line)
@@ -879,6 +1634,7 @@ public static partial class McpMod
             var fileName = $"{sanitizedSeed}_{timestamp}.replay";
             var replayDirectory = GetReplayDirectory();
             var path = Path.Combine(replayDirectory, fileName);
+            var tracePath = Path.ChangeExtension(path, ".trace");
             var characterId = TryGetCharacterId(root) ?? "";
             var gameMode = root.TryGetProperty("game_mode", out var gameModeElement)
                 ? gameModeElement.GetString() ?? "standard"
@@ -889,7 +1645,7 @@ public static partial class McpMod
                 : 0;
             var runKey = $"{saveScope}:profile{profileId}:{startTime?.ToString(CultureInfo.InvariantCulture) ?? timestamp}:{seed}";
 
-            return new ReplayRunInfo(runKey, path, currentRunPath, seed, gameMode, characterId, ascension);
+            return new ReplayRunInfo(runKey, path, tracePath, currentRunPath, seed, gameMode, characterId, ascension);
         }
         catch (Exception ex)
         {
@@ -973,6 +1729,7 @@ public static partial class McpMod
     private sealed record ReplayRunInfo(
         string RunKey,
         string Path,
+        string TracePath,
         string CurrentRunPath,
         string Seed,
         string GameMode,

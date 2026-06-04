@@ -66,6 +66,18 @@ public static partial class McpMod
         catch { return null; }
     }
 
+    internal static string? SafeGetLocStringKey(Func<object?> getter)
+    {
+        try
+        {
+            var result = getter();
+            if (result is MegaCrit.Sts2.Core.Localization.LocString locString)
+                return locString.LocEntryKey;
+            return null;
+        }
+        catch { return null; }
+    }
+
     internal static string StripRichTextTags(string text)
     {
         // Remove BBCode-style tags like [color=red], [/color], etc.

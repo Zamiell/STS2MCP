@@ -1079,10 +1079,9 @@ public static partial class McpMod
         var entityCounts = new Dictionary<string, int>();
         foreach (var creature in combatState.Enemies)
         {
+            var enemy = BuildEnemyState(creature, entityCounts);
             if (creature.IsAlive)
-            {
-                enemies.Add(BuildEnemyState(creature, entityCounts));
-            }
+                enemies.Add(enemy);
         }
         battle["enemies"] = enemies;
 
@@ -1379,6 +1378,7 @@ public static partial class McpMod
                 var optData = new Dictionary<string, object?>
                 {
                     ["index"] = index,
+                    ["title_key"] = SafeGetLocStringKey(() => opt.Title),
                     ["title"] = SafeGetText(() => opt.Title),
                     ["description"] = SafeGetText(() => opt.Description),
                     ["is_locked"] = opt.IsLocked,

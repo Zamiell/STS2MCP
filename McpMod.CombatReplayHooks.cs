@@ -10,6 +10,9 @@ using MegaCrit.Sts2.Core.Entities.Players;
 using MegaCrit.Sts2.Core.GameActions;
 using MegaCrit.Sts2.Core.GameActions.Multiplayer;
 using MegaCrit.Sts2.Core.Models;
+using MegaCrit.Sts2.Core.Multiplayer.Game;
+using MegaCrit.Sts2.Core.Nodes.Cards.Holders;
+using MegaCrit.Sts2.Core.Nodes.Screens.CardSelection;
 using MegaCrit.Sts2.Core.Runs;
 
 namespace STS2_MCP;
@@ -28,21 +31,12 @@ public static partial class McpMod
         }
     }
 
-    [HarmonyPatch(typeof(CardModel), nameof(CardModel.TryManualPlay))]
-    private static class CardModelTryManualPlayReplayPatch
+    [HarmonyPatch(typeof(ActionExecutor), "AfterActionFinished")]
+    private static class ActionExecutorAfterActionFinishedReplayPlaybackPatch
     {
-        private static void Prefix(CardModel __instance, Creature? target)
+        private static void Postfix(GameAction action)
         {
-            TryRecordObservedManualPlayCard(__instance, target);
-        }
-    }
-
-    [HarmonyPatch(typeof(PlayerCmd), nameof(PlayerCmd.EndTurn))]
-    private static class PlayerCmdEndTurnReplayPatch
-    {
-        private static void Prefix(Player player)
-        {
-            TryRecordObservedEndTurn(player);
+            RememberCompletedReplayAction(action);
         }
     }
 
@@ -64,25 +58,30 @@ public static partial class McpMod
         }
     }
 
+    [HarmonyPatch(typeof(NChooseACardSelectionScreen), "SelectHolder")]
+    private static class NChooseACardSelectionScreenSelectHolderReplayPatch
+    {
+        private static void Prefix(NCardHolder cardHolder)
+        {
+            TryRecordObservedChooseCard(cardHolder);
+        }
+    }
+
+    [HarmonyPatch(typeof(RestSiteSynchronizer), nameof(RestSiteSynchronizer.ChooseLocalOption))]
+    private static class RestSiteSynchronizerChooseLocalOptionReplayPatch
+    {
+        private static void Prefix(RestSiteSynchronizer __instance, int index)
+        {
+            TryRecordObservedRestSiteOption(__instance, index);
+        }
+    }
+
     private static void TryRecordQueuedCombatAction(GameAction action)
     {
         if (action is PlayCardAction playCardAction)
             TryRecordObservedPlayCard(playCardAction);
         else if (action is EndPlayerTurnAction endTurnAction)
             TryRecordObservedEndPlayerTurnAction(endTurnAction);
-    }
-
-    private static void TryRecordObservedManualPlayCard(CardModel card, Creature? target)
-    {
-        if (!TryGetLocalReplayPlayer(out var player)
-            || !ReferenceEquals(card.Owner, player)
-            || !card.CanPlayTargeting(target)
-            || !TryGetCardIndexInHand(player, card, out var cardIndex))
-        {
-            return;
-        }
-
-        RecordObservedPlayCard(card, cardIndex, target);
     }
 
     private static void TryRecordObservedPlayCard(PlayCardAction action)
@@ -122,21 +121,6 @@ public static partial class McpMod
             return;
 
         if (!ReferenceEquals(player, actionPlayer) || WasObservedCombatCommandJustRecorded("end_turn", null, null))
-            return;
-
-        RememberObservedCombatCommand("end_turn", null, null);
-        RecordObservedCombatReplayCommand(new Dictionary<string, object?>
-        {
-            ["action"] = "end_turn"
-        });
-    }
-
-    private static void TryRecordObservedEndTurn(Player player)
-    {
-        if (!TryGetLocalReplayPlayer(out var localPlayer) || !ReferenceEquals(player, localPlayer))
-            return;
-
-        if (WasObservedCombatCommandJustRecorded("end_turn", null, null))
             return;
 
         RememberObservedCombatCommand("end_turn", null, null);
@@ -203,6 +187,42 @@ public static partial class McpMod
         {
             ["action"] = "discard_potion",
             ["slot"] = slot
+        });
+    }
+
+    private static void TryRecordObservedChooseCard(NCardHolder cardHolder)
+    {
+        if (!TryGetLocalReplayPlayer(out _))
+            return;
+
+        var card = cardHolder.CardModel;
+        if (card == null)
+            return;
+
+        RecordObservedCombatReplayCommand(new Dictionary<string, object?>
+        {
+            ["action"] = "select_card",
+            ["card_id"] = card.Id.Entry
+        });
+    }
+
+    private static void TryRecordObservedRestSiteOption(RestSiteSynchronizer synchronizer, int index)
+    {
+        if (_suppressReplayRecording || RunManager.Instance?.IsInProgress != true)
+            return;
+
+        var options = synchronizer.GetLocalOptions();
+        if (index < 0 || index >= options.Count)
+            return;
+
+        var optionId = options[index].OptionId;
+        if (string.IsNullOrWhiteSpace(optionId))
+            return;
+
+        RecordObservedReplayCommand(new Dictionary<string, object?>
+        {
+            ["action"] = "choose_rest_option",
+            ["option_id"] = optionId
         });
     }
 
@@ -295,9 +315,6 @@ public static partial class McpMod
         var entityCounts = new Dictionary<string, int>();
         foreach (var enemy in combatState.Enemies)
         {
-            if (!enemy.IsAlive)
-                continue;
-
             var baseId = enemy.Monster?.Id.Entry ?? "unknown";
             if (!entityCounts.TryGetValue(baseId, out var count))
                 count = 0;

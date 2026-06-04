@@ -74,6 +74,7 @@ public static partial class McpMod
             "end_turn" => ExecuteEndTurn(player),
             "choose_map_node" => ExecuteChooseMapNode(data),
             "choose_event_option" => ExecuteChooseEventOption(data),
+            "choose_event_option_by_title_key" => ExecuteChooseEventOptionByTitleKey(data),
             "advance_dialogue" => ExecuteAdvanceDialogue(),
             "choose_rest_option" => ExecuteChooseRestOption(data),
             "shop_purchase" => ExecuteShopPurchase(player, data),
@@ -303,6 +304,9 @@ public static partial class McpMod
         {
             if (!TryFindReplayCardInHand(hand, requestedCardId, out var resolvedIndex, out var resolvedCard))
             {
+                if (!string.IsNullOrWhiteSpace(requestedCardId))
+                    return Error($"Card '{requestedCardId}' is not playable in hand");
+
                 if (cardIndex < 0 || cardIndex >= hand.Cards.Count)
                     return Error($"card_index {cardIndex} out of range (hand has {hand.Cards.Count} cards)");
 
@@ -322,22 +326,28 @@ public static partial class McpMod
         Creature? target = null;
         if (card.TargetType == TargetType.AnyEnemy)
         {
-            if (!data.TryGetValue("target", out var targetElem))
+            if (data.TryGetValue("target", out var targetElem))
+            {
+                string targetId = targetElem.GetString() ?? "";
+                target = ResolveTarget(combatState, targetId);
+                if (target == null)
+                    return Error($"Target '{targetId}' not found among alive enemies");
+            }
+            else if (!TryResolveOnlyAliveEnemy(combatState, out target))
+            {
                 return Error("Card requires a target. Provide 'target' with an entity_id.");
-
-            string targetId = targetElem.GetString() ?? "";
-            target = ResolveTarget(combatState, targetId);
-            if (target == null)
-                return Error($"Target '{targetId}' not found among alive enemies");
+            }
         }
 
-        // Play the card via the action queue (same path as the game UI)
-        RunManager.Instance.ActionQueueSynchronizer.RequestEnqueue(new PlayCardAction(card, target));
+        var nextActionId = RunManager.Instance.ActionQueueSet.NextActionId;
+        if (!card.TryManualPlay(target))
+            return Error($"Card '{card.Title}' could not be manually played right now");
 
         return new Dictionary<string, object?>
         {
             ["status"] = "ok",
-            ["message"] = $"Playing '{card.Title}'" + (target != null ? $" targeting {SafeGetText(() => target.Monster?.Title) ?? "target"}" : "")
+            ["message"] = $"Playing '{card.Title}'" + (target != null ? $" targeting {SafeGetText(() => target.Monster?.Title) ?? "target"}" : ""),
+            ["action_id"] = nextActionId
         };
     }
 
@@ -393,12 +403,14 @@ public static partial class McpMod
         if (hand != null && (hand.InCardPlay || hand.CurrentMode != NPlayerHand.Mode.Play))
             return Error("Cannot end turn while a card is being played or hand is in selection mode");
 
+        var nextActionId = RunManager.Instance.ActionQueueSet.NextActionId;
         PlayerCmd.EndTurn(player, canBackOut: false);
 
         return new Dictionary<string, object?>
         {
             ["status"] = "ok",
-            ["message"] = "Ending turn"
+            ["message"] = "Ending turn",
+            ["action_id"] = nextActionId
         };
     }
 
@@ -464,6 +476,7 @@ public static partial class McpMod
                 break;
         }
 
+        var nextActionId = RunManager.Instance.ActionQueueSet.NextActionId;
         potion.EnqueueManualUse(target);
 
         string targetMsg = potion.TargetType switch
@@ -476,7 +489,8 @@ public static partial class McpMod
         return new Dictionary<string, object?>
         {
             ["status"] = "ok",
-            ["message"] = $"Using potion '{SafeGetText(() => potion.Title)}' from slot {slot}{targetMsg}"
+            ["message"] = $"Using potion '{SafeGetText(() => potion.Title)}' from slot {slot}{targetMsg}",
+            ["action_id"] = nextActionId
         };
     }
 
@@ -538,6 +552,42 @@ public static partial class McpMod
         };
     }
 
+    [McpAction("choose_event_option_by_title_key", "Event", "Choose an event option by localization title key.")]
+    [McpActionField("title_key", "string", true, "Localization key for the event option title.")]
+    private static Dictionary<string, object?> ExecuteChooseEventOptionByTitleKey(Dictionary<string, JsonElement> data)
+    {
+        var uiRoom = NEventRoom.Instance;
+        if (uiRoom == null)
+            return Error("Event room is not open");
+
+        if (!data.TryGetValue("title_key", out var titleKeyElem))
+            return Error("Missing 'title_key' (event option localization title key)");
+
+        var titleKey = titleKeyElem.GetString() ?? "";
+        if (string.IsNullOrWhiteSpace(titleKey))
+            return Error("'title_key' must not be empty");
+
+        var buttons = FindAll<NEventOptionButton>(uiRoom);
+        foreach (var button in buttons)
+        {
+            var optionTitleKey = SafeGetLocStringKey(() => button.Option.Title);
+            if (!string.Equals(optionTitleKey, titleKey, StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            if (button.Option.IsLocked)
+                return Error($"Event option '{titleKey}' is locked");
+
+            button.ForceClick();
+            return new Dictionary<string, object?>
+            {
+                ["status"] = "ok",
+                ["message"] = $"Choosing event option: {titleKey}"
+            };
+        }
+
+        return Error($"No event option with title_key '{titleKey}' is available");
+    }
+
     [McpAction("advance_dialogue", "Event", "Advance event dialogue when a dialogue-only event is waiting.")]
     private static Dictionary<string, object?> ExecuteAdvanceDialogue()
     {
@@ -563,14 +613,10 @@ public static partial class McpMod
     }
 
     [McpAction("choose_rest_option", "Rest", "Choose a rest site option.")]
-    [McpActionField("index", "int", true, "0-based rest option index from next_options.")]
+    [McpActionField("index", "int", false, "0-based rest option index from next_options.")]
+    [McpActionField("option_id", "string", false, "Rest option id, such as HEAL or SMITH.")]
     private static Dictionary<string, object?> ExecuteChooseRestOption(Dictionary<string, JsonElement> data)
     {
-        if (!data.TryGetValue("index", out var indexElem))
-            return Error("Missing 'index' (rest site option index)");
-
-        int index = indexElem.GetInt32();
-
         var restRoom = NRestSiteRoom.Instance;
         if (restRoom == null)
             return Error("Rest site room is not open");
@@ -579,19 +625,38 @@ public static partial class McpMod
 
         if (buttons.Count == 0)
             return Error("No rest site options available");
+
+        int index;
+        if (data.TryGetValue("index", out var indexElem))
+            index = indexElem.GetInt32();
+        else if (data.TryGetValue("option_id", out var optionIdElem))
+        {
+            var optionId = optionIdElem.GetString() ?? "";
+            index = buttons.FindIndex(button =>
+                string.Equals(button.Option.OptionId, optionId, StringComparison.OrdinalIgnoreCase));
+            if (index < 0)
+                return Error($"Rest option '{optionId}' is not available");
+        }
+        else
+        {
+            return Error("Missing 'index' or 'option_id' (rest site option)");
+        }
+
         if (index < 0 || index >= buttons.Count)
             return Error($"Rest option index {index} out of range ({buttons.Count} options)");
 
         var button = buttons[index];
         if (!button.Option.IsEnabled)
             return Error($"Rest option {index} ({button.Option.OptionId}) is disabled");
+        var selectedOptionId = button.Option.OptionId;
         string optionName = SafeGetText(() => button.Option.Title) ?? button.Option.OptionId;
         button.ForceClick();
 
         return new Dictionary<string, object?>
         {
             ["status"] = "ok",
-            ["message"] = $"Selecting rest site option: {optionName}"
+            ["message"] = $"Selecting rest site option: {optionName}",
+            ["option_id"] = selectedOptionId
         };
     }
 
@@ -668,17 +733,14 @@ public static partial class McpMod
     }
 
     [McpAction("choose_map_node", "Map", "Travel to an available map node.")]
-    [McpActionField("index", "int", true, "0-based map node option index from next_options.")]
+    [McpActionField("index", "int", false, "0-based map node option index from next_options.")]
+    [McpActionField("col", "int", false, "Target map node column. Preferred for replay stability.")]
+    [McpActionField("row", "int", false, "Target map node row. Preferred for replay stability.")]
     private static Dictionary<string, object?> ExecuteChooseMapNode(Dictionary<string, JsonElement> data)
     {
         var mapScreen = NMapScreen.Instance;
         if (mapScreen == null || (!mapScreen.IsOpen && !IsNodeVisible(mapScreen)))
             return Error("Map screen is not open");
-
-        if (!data.TryGetValue("index", out var indexElem))
-            return Error("Missing 'index' (map node index from next_options)");
-
-        int index = indexElem.GetInt32();
 
         var travelable = FindAll<NMapPoint>(mapScreen)
             .Where(mp => mp.State == MapPointState.Travelable && mp.Point != null)
@@ -687,17 +749,38 @@ public static partial class McpMod
 
         if (travelable.Count == 0)
             return Error("No travelable map nodes available");
-        if (index < 0 || index >= travelable.Count)
-            return Error($"Map node index {index} out of range ({travelable.Count} options available)");
 
-        var target = travelable[index];
+        NMapPoint target;
+        if (data.TryGetValue("col", out var colElem)
+            && data.TryGetValue("row", out var rowElem)
+            && colElem.TryGetInt32(out var col)
+            && rowElem.TryGetInt32(out var row))
+        {
+            target = travelable.FirstOrDefault(mp => mp.Point!.coord.col == col && mp.Point.coord.row == row)!;
+            if (target == null)
+                return Error($"Map node ({col},{row}) is not currently travelable");
+        }
+        else
+        {
+            if (!data.TryGetValue("index", out var indexElem))
+                return Error("Missing 'index' or target 'col'/'row'");
+
+            int index = indexElem.GetInt32();
+            if (index < 0 || index >= travelable.Count)
+                return Error($"Map node index {index} out of range ({travelable.Count} options available)");
+
+            target = travelable[index];
+        }
+
         var pt = target.Point!;
         mapScreen.OnMapPointSelectedLocally(target);
 
         return new Dictionary<string, object?>
         {
             ["status"] = "ok",
-            ["message"] = $"Traveling to {pt.PointType} at ({pt.coord.col},{pt.coord.row})"
+            ["message"] = $"Traveling to {pt.PointType} at ({pt.coord.col},{pt.coord.row})",
+            ["col"] = pt.coord.col,
+            ["row"] = pt.coord.row
         };
     }
 
@@ -790,7 +873,7 @@ public static partial class McpMod
         if (data.TryGetValue("potion_id", out var potionElem)
             && reward is PotionReward potionReward)
         {
-            var expectedPotion = potionElem.GetString();
+            var expectedPotion = NormalizeModelIdForComparison(potionElem.GetString(), "POTION.");
             if (!string.Equals(potionReward.Potion?.Id.Entry, expectedPotion, StringComparison.OrdinalIgnoreCase))
                 return false;
         }
@@ -798,12 +881,22 @@ public static partial class McpMod
         if (data.TryGetValue("relic_id", out var relicElem)
             && reward is RelicReward relicReward)
         {
-            var expectedRelic = relicElem.GetString();
+            var expectedRelic = NormalizeModelIdForComparison(relicElem.GetString(), "RELIC.");
             if (!string.Equals(relicReward.Relic?.Id.Entry, expectedRelic, StringComparison.OrdinalIgnoreCase))
                 return false;
         }
 
         return true;
+    }
+
+    private static string NormalizeModelIdForComparison(string? value, string prefix)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return "";
+
+        return value.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)
+            ? value[prefix.Length..]
+            : value;
     }
 
     [McpAction("select_card_reward", "Reward", "Select a card from the card reward screen.")]
@@ -971,15 +1064,15 @@ public static partial class McpMod
     }
 
     [McpAction("select_card", "Selection", "Select or toggle a card in the active card selection screen.")]
-    [McpActionField("index", "int", true, "0-based card index in the active selection screen.")]
+    [McpActionField("index", "int", false, "0-based card index in the active selection screen.")]
+    [McpActionField("card_id", "string", false, "Card id to select from the active selection screen.")]
     private static Dictionary<string, object?> ExecuteSelectCard(Dictionary<string, JsonElement> data)
     {
         var overlay = NOverlayStack.Instance?.Peek();
 
-        if (!data.TryGetValue("index", out var indexElem))
-            return Error("Missing 'index' (card index in the grid)");
-
-        int index = indexElem.GetInt32();
+        var requestedCardId = data.TryGetValue("card_id", out var cardIdElem)
+            ? cardIdElem.GetString()
+            : null;
 
         if (overlay is NCardGridSelectionScreen gridScreen)
         {
@@ -988,6 +1081,9 @@ public static partial class McpMod
                 return Error("Card grid not found in selection screen");
 
             var holders = FindAllSortedByPosition<NGridCardHolder>(gridScreen);
+            if (!TryResolveSelectionCardIndex(data, requestedCardId, holders, out var index, out var error))
+                return Error(error);
+
             if (index < 0 || index >= holders.Count)
                 return Error($"Card index {index} out of range ({holders.Count} cards available)");
 
@@ -1003,7 +1099,13 @@ public static partial class McpMod
         }
         else if (overlay is NChooseACardSelectionScreen chooseScreen)
         {
+            if (!IsChooseCardSelectionReady(chooseScreen))
+                return Error("Card choice screen is not ready yet");
+
             var holders = FindAllSortedByPosition<NGridCardHolder>(chooseScreen);
+            if (!TryResolveSelectionCardIndex(data, requestedCardId, holders, out var index, out var error))
+                return Error(error);
+
             if (index < 0 || index >= holders.Count)
                 return Error($"Card index {index} out of range ({holders.Count} cards available)");
 
@@ -1021,27 +1123,83 @@ public static partial class McpMod
         return Error("No card selection screen is open");
     }
 
+    private static bool IsChooseCardSelectionReady(NChooseACardSelectionScreen chooseScreen)
+    {
+        var openedTicks = GetInstanceFieldValue(chooseScreen, "_openedTicks") as ulong?;
+        return openedTicks == null || Godot.Time.GetTicksMsec() - openedTicks > 350UL;
+    }
+
+    private static bool TryResolveSelectionCardIndex(
+        Dictionary<string, JsonElement> data,
+        string? requestedCardId,
+        List<NGridCardHolder> holders,
+        out int index,
+        out string error)
+    {
+        index = -1;
+        error = "";
+
+        if (data.TryGetValue("index", out var indexElem))
+        {
+            index = indexElem.GetInt32();
+            if (!string.IsNullOrWhiteSpace(requestedCardId)
+                && index >= 0
+                && index < holders.Count
+                && !CardIdMatches(holders[index].CardModel!, requestedCardId))
+            {
+                error = $"Card index {index} is '{holders[index].CardModel?.Id}', not '{requestedCardId}'";
+                return false;
+            }
+
+            return true;
+        }
+
+        if (string.IsNullOrWhiteSpace(requestedCardId))
+        {
+            error = "Missing 'index' or 'card_id' (card selection target)";
+            return false;
+        }
+
+        for (var i = 0; i < holders.Count; i++)
+        {
+            var card = holders[i].CardModel;
+            if (card != null && CardIdMatches(card, requestedCardId))
+            {
+                index = i;
+                return true;
+            }
+        }
+
+        error = $"Card '{requestedCardId}' is not selectable on the active screen";
+        return false;
+    }
+
     [McpAction("select_deck_card", "Selection", "Select or toggle a deck card in the active card selection screen.")]
-    [McpActionField("deck_index", "int", true, "0-based card index in the current deck.")]
-    [McpActionField("card_id", "string", false, "Optional card id assertion for the selected deck index.")]
+    [McpActionField("deck_index", "int", false, "0-based card index in the current deck.")]
+    [McpActionField("card_id", "string", false, "Card id to select, or an optional assertion for deck_index.")]
     private static Dictionary<string, object?> ExecuteSelectDeckCard(Player player, Dictionary<string, JsonElement> data)
     {
         var overlay = NOverlayStack.Instance?.Peek();
         if (overlay is not NCardGridSelectionScreen gridScreen)
             return Error("No deck card selection screen is open");
 
-        if (!data.TryGetValue("deck_index", out var deckIndexElem))
-            return Error("Missing 'deck_index'");
+        var requestedCardId = data.TryGetValue("card_id", out var cardIdElem)
+            ? cardIdElem.GetString()
+            : null;
+        int deckIndex;
+        if (data.TryGetValue("deck_index", out var deckIndexElem))
+            deckIndex = deckIndexElem.GetInt32();
+        else if (!TryFindUniqueDeckCardIndex(player, requestedCardId, out deckIndex, out var error))
+            return Error(error);
 
-        var deckIndex = deckIndexElem.GetInt32();
         if (deckIndex < 0 || deckIndex >= player.Deck.Cards.Count)
             return Error($"deck_index {deckIndex} out of range (deck has {player.Deck.Cards.Count} cards)");
 
         var card = player.Deck.Cards[deckIndex];
-        if (data.TryGetValue("card_id", out var cardIdElem)
-            && !CardIdMatches(card, cardIdElem.GetString() ?? ""))
+        if (!string.IsNullOrWhiteSpace(requestedCardId)
+            && !CardIdMatches(card, requestedCardId))
         {
-            return Error($"deck_index {deckIndex} is '{card.Id}', not '{cardIdElem.GetString()}'");
+            return Error($"deck_index {deckIndex} is '{card.Id}', not '{requestedCardId}'");
         }
 
         var grid = FindFirst<NCardGrid>(gridScreen);
@@ -1061,6 +1219,40 @@ public static partial class McpMod
             ["status"] = "ok",
             ["message"] = $"Toggling deck card selection: {cardName}"
         };
+    }
+
+    private static bool TryFindUniqueDeckCardIndex(
+        Player player,
+        string? requestedCardId,
+        out int deckIndex,
+        out string error)
+    {
+        deckIndex = -1;
+        error = "";
+        if (string.IsNullOrWhiteSpace(requestedCardId))
+        {
+            error = "Missing 'deck_index' or 'card_id'";
+            return false;
+        }
+
+        var matches = player.Deck.Cards
+            .Select((card, index) => (card, index))
+            .Where(candidate => CardIdMatches(candidate.card, requestedCardId))
+            .ToList();
+        if (matches.Count == 0)
+        {
+            error = $"Card '{requestedCardId}' was not found in the current deck";
+            return false;
+        }
+
+        if (matches.Count > 1)
+        {
+            error = $"Card '{requestedCardId}' is ambiguous in the current deck; provide deck_index";
+            return false;
+        }
+
+        deckIndex = matches[0].index;
+        return true;
     }
 
     private static bool CardIdMatches(CardModel card, string cardId)
@@ -1355,7 +1547,7 @@ public static partial class McpMod
     }
 
     [McpAction("claim_treasure_relic", "Treasure", "Claim a relic from a treasure room.")]
-    [McpActionField("index", "int", true, "0-based treasure relic index.")]
+    [McpActionField("index", "int", false, "0-based treasure relic index. Defaults to 0 when only one relic is claimable.")]
     private static Dictionary<string, object?> ExecuteClaimTreasureRelic(Dictionary<string, JsonElement> data)
     {
         var treasureUI = FindFirst<NTreasureRoom>(
@@ -1365,16 +1557,29 @@ public static partial class McpMod
 
         var relicCollection = treasureUI.GetNodeOrNull<NTreasureRoomRelicCollection>("%RelicCollection");
         if (relicCollection?.Visible != true)
-            return Error("Relic collection is not visible - chest may not be opened yet");
+        {
+            var chestButton = GetInstanceFieldValue(treasureUI, "_chestButton") as NButton;
+            if (chestButton is { IsEnabled: true })
+                chestButton.ForceClick();
 
-        if (!data.TryGetValue("index", out var indexElem))
-            return Error("Missing 'index' (relic index)");
-
-        int index = indexElem.GetInt32();
+            return Error("Relic collection is not visible - opening chest");
+        }
 
         var holders = FindAll<NTreasureRoomRelicHolder>(relicCollection)
             .Where(h => h.IsEnabled && h.Visible)
             .ToList();
+
+        int index;
+        if (data.TryGetValue("index", out var indexElem))
+        {
+            index = indexElem.GetInt32();
+        }
+        else if (holders.Count == 1)
+            index = 0;
+        else
+        {
+            return Error("Missing 'index' (treasure has multiple relics)");
+        }
 
         if (index < 0 || index >= holders.Count)
             return Error($"Relic index {index} out of range ({holders.Count} relics available)");
@@ -1495,18 +1700,37 @@ public static partial class McpMod
         var entityCounts = new Dictionary<string, int>();
         foreach (var creature in combatState.Enemies)
         {
-            if (!creature.IsAlive) continue;
             string baseId = creature.Monster?.Id.Entry ?? "unknown";
             if (!entityCounts.TryGetValue(baseId, out int count))
                 count = 0;
             entityCounts[baseId] = count + 1;
             string generatedId = $"{baseId}_{count}";
 
-            if (generatedId == entityId)
+            if (generatedId == entityId && creature.IsAlive)
                 return creature;
         }
 
         return null;
+    }
+
+    private static bool TryResolveOnlyAliveEnemy(ICombatState combatState, out Creature target)
+    {
+        target = null!;
+        foreach (var creature in combatState.Enemies)
+        {
+            if (!creature.IsAlive)
+                continue;
+
+            if (target != null)
+            {
+                target = null!;
+                return false;
+            }
+
+            target = creature;
+        }
+
+        return target != null;
     }
 
     [McpAction("menu_select", "Menu", "Select a menu, popup, character-select, or FTUE option.")]

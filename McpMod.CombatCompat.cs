@@ -19,4 +19,5 @@ public static partial class McpMod
             && !manager.EndingPlayerTurnPhaseOne
             && !manager.EndingPlayerTurnPhaseTwo;
     }
+
 }
